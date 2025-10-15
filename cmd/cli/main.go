@@ -11,7 +11,14 @@ import (
 	"strings"
 )
 
-const serverURL = "http://localhost:8080"
+var serverURL string
+
+func init() {
+	serverURL = os.Getenv("REDCLOUD_SERVER_URL")
+	if serverURL == "" {
+		serverURL = "http://localhost:8080"
+	}
+}
 
 func main() {
 	if len(os.Args) < 2 {
