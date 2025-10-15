@@ -15,7 +15,15 @@
 - [Features](#features)
 - [Architecture](#architecture)
 - [Installation](#installation)
-- [Quick Start](#quick-start)
+- [Docker Swarm Deployment (Multi-Machine Setup)](#docker-swarm-deployment-multi-machine-setup)
+  - [Prerequisites](#prerequisites-1)
+  - [Architecture Overview](#architecture-overview)
+  - [Step-by-Step Deployment](#step-by-step-deployment)
+  - [Using the CLI Client](#using-the-cli-client)
+  - [Useful Docker Swarm Commands](#useful-docker-swarm-commands)
+  - [Complete Teardown](#complete-teardown)
+  - [Troubleshooting](#troubleshooting)
+- [Quick Start (Local Development)](#quick-start-local-development)
 - [Usage](#usage)
   - [File Operations](#file-operations)
   - [Tag Operations](#tag-operations)
@@ -100,7 +108,468 @@ go build -o bin/cli-server ./cmd/cli-server
 go build -o bin/cli ./cmd/cli
 ```
 
-## Quick Start
+## Docker Swarm Deployment (Multi-Machine Setup)
+
+This guide explains how to deploy RedCloud Files using Docker Swarm across multiple machines in the same LAN. The server runs centrally on the manager node, while CLI clients can be run from any machine in the network.
+
+### Prerequisites
+
+- Docker Desktop installed and running on all machines
+- Git for cloning the repository
+- Machines connected to the same LAN network
+
+### Architecture Overview
+
+In this setup:
+- **Manager Node (PC1)**: Runs the Docker Swarm manager and hosts the API server
+- **Worker Node(s) (PC2, PC3, ...)**: Join the swarm and can run CLI clients
+- **Network**: All services communicate over a Docker overlay network (`redcloud-net`)
+
+### Step-by-Step Deployment
+
+#### On Manager Node (PC1)
+
+##### 1. Clone the Repository
+
+```bash
+git clone https://github.com/sekai02/redcloud-files.git
+cd redcloud-files
+```
+
+##### 2. Initialize Docker Swarm
+
+```bash
+docker swarm init
+```
+
+**Important**: Save the join token displayed. You'll need it for worker nodes. It looks like:
+
+```
+docker swarm join --token SWMTKN-1-xxxxx <MANAGER-IP>:2377
+```
+
+If you lose the token, retrieve it later with:
+
+```bash
+docker swarm join-token worker
+```
+
+##### 3. Create Overlay Network
+
+```bash
+docker network create --driver overlay --attachable redcloud-net
+```
+
+##### 4. Build Docker Images
+
+Build both server and client images:
+
+```bash
+# Build server image
+docker build -t redcloud-server:latest -f cmd/cli-server/dockerfile .
+
+# Build client image
+docker build -t redcloud-cli:latest -f cmd/cli/dockerfile .
+
+# Verify images were created
+docker images | grep redcloud
+```
+
+You should see:
+```
+REPOSITORY         TAG       IMAGE ID       CREATED         SIZE
+redcloud-server    latest    abc123def456   1 minute ago    XXX MB
+redcloud-cli       latest    def456ghi789   2 minutes ago   XXX MB
+```
+
+##### 5. Deploy the API Server Service
+
+```bash
+docker service create \
+  --name redcloud-server \
+  --network redcloud-net \
+  --publish published=8080,target=8080 \
+  --mount type=volume,source=redcloud-data,target=/data \
+  redcloud-server:latest
+```
+
+##### 6. Verify Service is Running
+
+```bash
+docker service ls
+```
+
+Expected output:
+```
+ID             NAME              MODE         REPLICAS   IMAGE                    PORTS
+xxxxx          redcloud-server   replicated   1/1        redcloud-server:latest   *:8080->8080/tcp
+```
+
+Check service logs:
+```bash
+docker service logs redcloud-server
+```
+
+##### 7. Get Manager IP Address
+
+```bash
+# On Linux
+ip addr show | grep "inet " | grep -v 127.0.0.1
+
+# On macOS
+ifconfig | grep "inet " | grep -v 127.0.0.1
+
+# On Windows (PowerShell)
+ipconfig | findstr IPv4
+```
+
+Note your LAN IP address (e.g., `192.168.1.100`). You'll need this for worker nodes.
+
+#### On Worker Node(s) (PC2, PC3, ...)
+
+##### 1. Join the Swarm
+
+Use the join token from the manager node:
+
+```bash
+docker swarm join --token SWMTKN-1-xxxxx <MANAGER-IP>:2377
+```
+
+Replace `<MANAGER-IP>` with the actual IP address of PC1.
+
+##### 2. Load Docker Images
+
+Worker nodes need the CLI image to run commands. Transfer the image from the manager node.
+
+**Option A: Using Image Files (Recommended)**
+
+On manager node, save the CLI image:
+```bash
+docker save redcloud-cli:latest | gzip > redcloud-cli.tar.gz
+```
+
+Transfer the file to worker node using scp, USB drive, or network share:
+```bash
+scp redcloud-cli.tar.gz user@<WORKER-IP>:~/
+```
+
+On worker node, load the image:
+```bash
+docker load < redcloud-cli.tar.gz
+```
+
+**Option B: Using Docker Registry**
+
+Set up a private registry or push to Docker Hub, then pull on worker nodes.
+
+##### 3. Verify Node Joined (run on Manager)
+
+On the manager node, verify the worker joined:
+
+```bash
+docker node ls
+```
+
+Expected output:
+```
+ID                            HOSTNAME   STATUS    AVAILABILITY   MANAGER STATUS   ENGINE VERSION
+abc123def456 *                pc1        Ready     Active         Leader           XX.X.X
+def456ghi789                  pc2        Ready     Active                          XX.X.X
+```
+
+### Using the CLI Client
+
+The CLI client supports the `REDCLOUD_SERVER_URL` environment variable to specify the server address. By default, it connects to `http://localhost:8080`.
+
+#### Option 1: Using Docker Run (Recommended for LAN Access)
+
+**On Manager Node (PC1):**
+
+Connect to the server using the Docker overlay network:
+
+```bash
+# Create a file
+docker run --rm --network redcloud-net \
+  -e REDCLOUD_SERVER_URL="http://redcloud-server:8080" \
+  redcloud-cli:latest create --dev 1
+
+# Write data to a file
+docker run --rm --network redcloud-net \
+  -e REDCLOUD_SERVER_URL="http://redcloud-server:8080" \
+  redcloud-cli:latest write --dev 1 --file 1 --data "Hello from Docker Swarm"
+
+# Read a file
+docker run --rm --network redcloud-net \
+  -e REDCLOUD_SERVER_URL="http://redcloud-server:8080" \
+  redcloud-cli:latest read --dev 1 --file 1
+
+# Add tags
+docker run --rm --network redcloud-net \
+  -e REDCLOUD_SERVER_URL="http://redcloud-server:8080" \
+  redcloud-cli:latest tag-add --dev 1 --file 1 --tag example
+
+# List devices
+docker run --rm --network redcloud-net \
+  -e REDCLOUD_SERVER_URL="http://redcloud-server:8080" \
+  redcloud-cli:latest devices
+```
+
+**On Worker Nodes (PC2, PC3):**
+
+Worker nodes have two options to connect to the server:
+
+**Option A: Using Manager's LAN IP (Simple, No Swarm Network Required)**
+
+```bash
+MANAGER_IP="192.168.1.100"
+
+docker run --rm \
+  -e REDCLOUD_SERVER_URL="http://$MANAGER_IP:8080" \
+  redcloud-cli:latest create --dev 1
+
+docker run --rm \
+  -e REDCLOUD_SERVER_URL="http://$MANAGER_IP:8080" \
+  redcloud-cli:latest write --dev 1 --file 1 --data "Hello from Worker Node"
+
+docker run --rm \
+  -e REDCLOUD_SERVER_URL="http://$MANAGER_IP:8080" \
+  redcloud-cli:latest read --dev 1 --file 1
+```
+
+**Option B: Using Overlay Network (Same as Manager)**
+
+Worker nodes joined to the swarm can use the overlay network to connect via service name:
+
+```bash
+docker run --rm --network redcloud-net \
+  -e REDCLOUD_SERVER_URL="http://redcloud-server:8080" \
+  redcloud-cli:latest create --dev 1
+
+docker run --rm --network redcloud-net \
+  -e REDCLOUD_SERVER_URL="http://redcloud-server:8080" \
+  redcloud-cli:latest write --dev 1 --file 1 --data "Hello from Overlay Network"
+```
+
+**Creating Helper Aliases:**
+
+To avoid typing the full command each time, create shell aliases:
+
+```bash
+alias rcli-manager='docker run --rm --network redcloud-net -e REDCLOUD_SERVER_URL="http://redcloud-server:8080" redcloud-cli:latest'
+
+alias rcli-worker='docker run --rm -e REDCLOUD_SERVER_URL="http://192.168.1.100:8080" redcloud-cli:latest'
+```
+
+Then use them:
+```bash
+rcli-manager create --dev 1
+rcli-worker devices
+```
+
+#### Option 2: Direct API Access
+
+Access the API directly from any machine in the LAN:
+
+```bash
+# Get manager IP (example: 192.168.1.100)
+MANAGER_IP="192.168.1.100"
+
+# Create a file
+curl -X POST http://$MANAGER_IP:8080/v1/files \
+  -H "Content-Type: application/json" \
+  -d '{"device_id": 1}'
+
+# Write data to file
+curl -X PUT "http://$MANAGER_IP:8080/v1/files/1/1" \
+  -H "Content-Type: application/octet-stream" \
+  --data "Hello from Worker Node"
+
+# Read file
+curl http://$MANAGER_IP:8080/v1/files/1/1
+
+# Add tag
+curl -X POST http://$MANAGER_IP:8080/v1/tags/1/1 \
+  -H "Content-Type: application/json" \
+  -d '{"name": "remote"}'
+
+# List tags
+curl http://$MANAGER_IP:8080/v1/tags/1/1
+
+# List devices
+curl http://$MANAGER_IP:8080/v1/devices
+```
+
+### Useful Docker Swarm Commands
+
+#### Service Management
+
+```bash
+# List all services
+docker service ls
+
+# Inspect service details
+docker service inspect redcloud-server
+
+# View service logs
+docker service logs redcloud-server
+
+# Follow logs in real-time
+docker service logs -f redcloud-server
+
+# Scale the service (run multiple replicas)
+docker service scale redcloud-server=3
+
+# Update service image
+docker service update --image redcloud-server:latest redcloud-server
+
+# Remove service
+docker service rm redcloud-server
+```
+
+#### Node Management
+
+```bash
+# List all nodes in swarm
+docker node ls
+
+# Inspect node details
+docker node inspect <node-id>
+
+# Promote worker to manager
+docker node promote <node-id>
+
+# Remove node from swarm (run on worker)
+docker swarm leave
+
+# Remove node from swarm (run on manager, after worker left)
+docker node rm <node-id>
+```
+
+#### Network Management
+
+```bash
+# List networks
+docker network ls
+
+# Inspect overlay network
+docker network inspect redcloud-net
+
+# Remove network (only after removing services)
+docker network rm redcloud-net
+```
+
+#### Volume Management
+
+```bash
+# List volumes
+docker volume ls
+
+# Inspect data volume
+docker volume inspect redcloud-data
+
+# Backup data volume
+docker run --rm \
+  -v redcloud-data:/data \
+  -v $(pwd):/backup \
+  alpine tar czf /backup/redcloud-backup.tar.gz -C /data .
+
+# Restore data volume
+docker run --rm \
+  -v redcloud-data:/data \
+  -v $(pwd):/backup \
+  alpine tar xzf /backup/redcloud-backup.tar.gz -C /data
+```
+
+#### Image Management
+
+```bash
+# List images
+docker images
+
+# Save image to file (for transferring to other machines)
+docker save redcloud-server:latest | gzip > redcloud-server.tar.gz
+docker save redcloud-cli:latest | gzip > redcloud-cli.tar.gz
+
+# Load image from file (on worker nodes)
+docker load < redcloud-server.tar.gz
+docker load < redcloud-cli.tar.gz
+
+# Remove image
+docker rmi redcloud-server:latest
+```
+
+### Complete Teardown
+
+To completely remove the deployment:
+
+```bash
+# On manager node
+docker service rm redcloud-server
+docker network rm redcloud-net
+docker volume rm redcloud-data
+
+# On each worker node
+docker swarm leave
+
+# On manager node (after workers left)
+docker swarm leave --force
+
+# Remove images (optional)
+docker rmi redcloud-server:latest redcloud-cli:latest
+```
+
+### Troubleshooting
+
+#### Service Won't Start
+
+```bash
+# Check service status
+docker service ps redcloud-server --no-trunc
+
+# View detailed logs
+docker service logs redcloud-server
+```
+
+#### Network Issues
+
+```bash
+# Verify overlay network exists
+docker network ls | grep redcloud-net
+
+# Check if service is attached to network
+docker service inspect redcloud-server | grep -A 10 Networks
+
+# Test connectivity from worker to manager
+ping <MANAGER-IP>
+```
+
+#### Port Already in Use
+
+```bash
+# Check what's using port 8080
+sudo lsof -i :8080  # Linux/macOS
+netstat -ano | findstr :8080  # Windows
+
+# Kill process or use different port
+docker service update --publish-rm 8080:8080 --publish-add 8081:8080 redcloud-server
+```
+
+#### Worker Can't Join Swarm
+
+```bash
+# Ensure firewall allows these ports:
+# TCP 2377 (cluster management)
+# TCP/UDP 7946 (node communication)
+# UDP 4789 (overlay network)
+
+# On Linux, open ports:
+sudo ufw allow 2377/tcp
+sudo ufw allow 7946/tcp
+sudo ufw allow 7946/udp
+sudo ufw allow 4789/udp
+```
+
+## Quick Start (Local Development)
 
 ### 1. Start the Server
 
@@ -109,6 +578,12 @@ go build -o bin/cli ./cmd/cli
 ```
 
 The server starts on `http://localhost:8080` and creates a default device (ID: 1).
+
+**Note**: The CLI client uses the `REDCLOUD_SERVER_URL` environment variable to connect to the server. By default, it connects to `http://localhost:8080`. To connect to a different server, set the environment variable:
+
+```bash
+export REDCLOUD_SERVER_URL="http://192.168.1.100:8080"
+```
 
 ### 2. Create a File
 
@@ -488,4 +963,4 @@ The paper presents a novel approach to file organization using tags instead of h
 
 ---
 
-**Note**: This is an academic project developed for educational purposes. While initially centralized, the system is designed with future distributed capabilities in mind.
+**Note**: This is an academic project developed for educational purposes. The system is centralized with a single server instance managing all file storage and metadata.
