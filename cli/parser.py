@@ -3,6 +3,7 @@
 import shlex
 from typing import Optional
 
+from cli.constants import SUPPORTED_FILE_EXTENSIONS
 from cli.models import (
     AddCommand,
     AddTagsCommand,
@@ -72,7 +73,7 @@ def _parse_add(args: list[str]) -> AddCommand:
             file_list.append(arg)
             mode = "files"
         elif mode == "files":
-            if arg.startswith("#") or not arg.endswith((".txt", ".pdf", ".jpg", ".png", ".doc", ".docx", ".csv", ".json", ".xml", ".chk")):
+            if arg.startswith("#") or not arg.endswith(SUPPORTED_FILE_EXTENSIONS):
                 tag_list.append(arg)
                 mode = "tags"
             else:
