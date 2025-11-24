@@ -1,5 +1,7 @@
 """CLI entry point: REPL with prompt_toolkit."""
 
+import os
+import sys
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import InMemoryHistory
@@ -26,7 +28,7 @@ COMMANDS = ["add", "delete", "list", "add-tags", "delete-tags", "exit", "help"]
 
 STYLE = Style.from_dict(
     {
-        "prompt": "#00aa00 bold",
+        "prompt": "#F45935 bold",
         "command": "#0088ff bold",
     }
 )
@@ -48,6 +50,32 @@ Examples:
   add-tags important -- urgent
   delete-tags work urgent -- archived
   delete archived"""
+
+
+def clear_screen() -> None:
+    """Clear the terminal screen (cross-platform)."""
+    if sys.platform == "win32":
+        os.system("cls")
+    else:
+        os.system("clear")
+
+
+def show_logo() -> None:
+    """Display RedCloud logo with ANSI colors."""
+    # ANSI color codes: \033[38;2;R;G;Bm for RGB colors
+    # Git-like red-orange: RGB(244, 89, 53) or #F45935
+    RED_ORANGE = "\033[38;2;244;89;53m"
+    RESET = "\033[0m"
+
+    logo = f"""{RED_ORANGE}
+ ██████╗ ███████╗██████╗  ██████╗██╗      ██████╗ ██╗   ██╗██████╗      ██████╗██╗     ██╗
+ ██╔══██╗██╔════╝██╔══██╗██╔════╝██║     ██╔═══██╗██║   ██║██╔══██╗    ██╔════╝██║     ██║
+ ██████╔╝█████╗  ██║  ██║██║     ██║     ██║   ██║██║   ██║██║  ██║    ██║     ██║     ██║
+ ██╔══██╗██╔══╝  ██║  ██║██║     ██║     ██║   ██║██║   ██║██║  ██║    ██║     ██║     ██║
+ ██║  ██║███████╗██████╔╝╚██████╗███████╗╚██████╔╝╚██████╔╝██████╔╝    ╚██████╗███████╗██║
+ ╚═╝  ╚═╝╚══════╝╚═════╝  ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝      ╚═════╝╚══════╝╚═╝
+{RESET}"""
+    print(logo)
 
 
 def dispatch_command(cmd_obj) -> str:
@@ -74,6 +102,8 @@ def repl_loop() -> None:
         completer=completer, history=history, style=STYLE
     )
 
+    clear_screen()
+    show_logo()
     print("RedCloud CLI - Tag-based File System")
     print("Type 'help' for commands or 'exit' to quit.\n")
 
