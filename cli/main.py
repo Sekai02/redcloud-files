@@ -24,7 +24,7 @@ from cli.models import (
 )
 
 
-COMMANDS = ["add", "delete", "list", "add-tags", "delete-tags", "exit", "help"]
+COMMANDS = ["add", "delete", "list", "add-tags", "delete-tags", "clear", "exit", "help"]
 
 STYLE = Style.from_dict(
     {
@@ -39,6 +39,7 @@ HELP_TEXT = """Available commands:
   list tag-query               List files matching tag query (empty = all)
   add-tags tag-query tag-list  Add tags to files matching tag query
   delete-tags tag-query tag-list  Remove tags from files matching tag query
+  clear                        Clear screen and redisplay welcome message
   help                         Show this help
   exit                         Exit REPL
 
@@ -120,6 +121,13 @@ def repl_loop() -> None:
 
             if user_input.strip() == "help":
                 print(HELP_TEXT)
+                continue
+
+            if user_input.strip() == "clear":
+                clear_screen()
+                show_logo()
+                print("RedCloud CLI - Tag-based File System")
+                print("Type 'help' for commands or 'exit' to quit.\n")
                 continue
 
             cmd_obj = parse_command(user_input)
