@@ -1,1 +1,1 @@
-# Project dependencies placeholder
+prompt_toolkit>=3.0.0
