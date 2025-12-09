@@ -218,3 +218,6 @@ __marimo__/
 # Specific Guidance for LLM consults
 centralized/
 distributed/
+
+# Data folder
+data/
