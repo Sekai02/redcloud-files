@@ -69,5 +69,16 @@ async def get_current_user(authorization: str = Header(...)) -> str:
         )
 
     api_key = authorization.replace("Bearer ", "")
-
-    raise NotImplementedError("API Key validation not implemented")
+    
+    from controller.services.auth_service import AuthService
+    
+    auth_service = AuthService()
+    user_id = auth_service.validate_api_key(api_key)
+    
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired API Key"
+        )
+    
+    return user_id

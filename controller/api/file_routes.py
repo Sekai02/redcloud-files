@@ -1,6 +1,7 @@
 """File operation API routes."""
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 
 from controller.auth import get_current_user
 from controller.models.api_models import (
@@ -10,8 +11,12 @@ from controller.models.api_models import (
     AddTagsRequest,
     AddTagsResponse,
     DeleteTagsRequest,
-    DeleteTagsResponse
+    DeleteTagsResponse,
+    FileMetadataResponse
 )
+from controller.services.file_service import FileService
+from controller.services.tag_service import TagService
+from controller.utils import parse_tags
 
 router = APIRouter(prefix="/files", tags=["Files"])
 
@@ -42,7 +47,30 @@ async def upload_file(
         - 500: Internal server error
         - 503: Chunkserver unavailable
     """
-    raise NotImplementedError("File upload not implemented")
+    file_service = FileService()
+    
+    tag_list = parse_tags(tags)
+    
+    file_content = await file.read()
+    file_size = len(file_content)
+    
+    from io import BytesIO
+    file_data = BytesIO(file_content)
+    
+    file_metadata = file_service.upload_file(
+        file_name=file.filename,
+        file_data=file_data,
+        file_size=file_size,
+        tags=tag_list,
+        owner_id=current_user,
+    )
+    
+    return AddFileResponse(
+        file_id=file_metadata.file_id,
+        name=file_metadata.name,
+        size=file_metadata.size,
+        tags=file_metadata.tags,
+    )
 
 
 @router.get("", response_model=ListFilesResponse)
@@ -66,7 +94,25 @@ async def list_files(
         - 401: Invalid or missing API Key
         - 500: Internal server error
     """
-    raise NotImplementedError("File listing not implemented")
+    tag_service = TagService()
+    
+    tag_list = parse_tags(tags)
+    
+    files = tag_service.query_by_tags(tag_list, current_user)
+    
+    file_responses = [
+        FileMetadataResponse(
+            file_id=file.file_id,
+            name=file.name,
+            size=file.size,
+            tags=file.tags,
+            owner_id=file.owner_id,
+            created_at=file.created_at.isoformat(),
+        )
+        for file in files
+    ]
+    
+    return ListFilesResponse(files=file_responses)
 
 
 @router.get("/{file_id}/download")
@@ -91,7 +137,22 @@ async def download_file(
         - 500: Internal server error
         - 503: Chunkserver unavailable
     """
-    raise NotImplementedError("File download not implemented")
+    file_service = FileService()
+    
+    file, chunk_descriptors = file_service.download_file(file_id, current_user)
+    
+    async def chunk_generator():
+        for chunk_desc in chunk_descriptors:
+            yield b""
+    
+    return StreamingResponse(
+        chunk_generator(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{file.name}"',
+            "Content-Length": str(file.size),
+        }
+    )
 
 
 @router.delete("", response_model=DeleteFilesResponse)
@@ -116,7 +177,16 @@ async def delete_files(
         - 401: Invalid or missing API Key
         - 500: Internal server error
     """
-    raise NotImplementedError("File deletion not implemented")
+    file_service = FileService()
+    
+    tag_list = parse_tags(tags)
+    
+    deleted_file_ids = file_service.delete_files(tag_list, current_user)
+    
+    return DeleteFilesResponse(
+        deleted_count=len(deleted_file_ids),
+        file_ids=deleted_file_ids,
+    )
 
 
 @router.post("/tags", response_model=AddTagsResponse)
@@ -142,7 +212,18 @@ async def add_tags(
         - 401: Invalid or missing API Key
         - 500: Internal server error
     """
-    raise NotImplementedError("Add tags not implemented")
+    tag_service = TagService()
+    
+    updated_file_ids = tag_service.add_tags_to_files(
+        request.query_tags,
+        request.new_tags,
+        current_user
+    )
+    
+    return AddTagsResponse(
+        updated_count=len(updated_file_ids),
+        file_ids=updated_file_ids,
+    )
 
 
 @router.delete("/tags", response_model=DeleteTagsResponse)
@@ -168,4 +249,15 @@ async def delete_tags(
         - 401: Invalid or missing API Key
         - 500: Internal server error
     """
-    raise NotImplementedError("Delete tags not implemented")
+    tag_service = TagService()
+    
+    updated_file_ids = tag_service.remove_tags_from_files(
+        request.query_tags,
+        request.tags_to_remove,
+        current_user
+    )
+    
+    return DeleteTagsResponse(
+        updated_count=len(updated_file_ids),
+        file_ids=updated_file_ids,
+    )
