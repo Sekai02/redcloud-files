@@ -5,7 +5,7 @@ from typing import List
 from controller.repositories.file_repository import FileRepository
 from controller.repositories.tag_repository import TagRepository
 from controller.database import get_db_connection
-from controller.types import FileMetadata
+from controller.domain import FileMetadata
 from controller.exceptions import InvalidTagQueryError
 
 

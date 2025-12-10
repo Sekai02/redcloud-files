@@ -9,7 +9,7 @@ from controller.repositories.tag_repository import TagRepository
 from controller.repositories.chunk_repository import ChunkRepository, Chunk
 from controller.database import get_db_connection
 from controller.exceptions import FileNotFoundError, UnauthorizedAccessError
-from controller.types import FileMetadata
+from controller.domain import FileMetadata
 from common.types import ChunkDescriptor
 from common.constants import CHUNK_SIZE_BYTES
 

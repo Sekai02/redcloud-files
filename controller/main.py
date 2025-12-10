@@ -6,8 +6,8 @@ from fastapi.responses import JSONResponse
 
 from controller.config import CONTROLLER_HOST, CONTROLLER_PORT
 from controller.database import init_database
-from controller.api.auth_routes import router as auth_router
-from controller.api.file_routes import router as file_router
+from controller.routes.auth_routes import router as auth_router
+from controller.routes.file_routes import router as file_router
 from controller.exceptions import (
     DFSException,
     UserAlreadyExistsError,
