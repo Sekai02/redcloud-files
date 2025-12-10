@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, status
 
-from controller.models.api_models import (
+from controller.schemas.auth import (
     RegisterRequest,
     RegisterResponse,
     LoginRequest,

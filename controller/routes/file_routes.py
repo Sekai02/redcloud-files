@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from controller.auth import get_current_user
-from controller.models.api_models import (
+from controller.schemas.files import (
     AddFileResponse,
     ListFilesResponse,
     DeleteFilesResponse,

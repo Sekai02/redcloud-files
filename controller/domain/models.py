@@ -1,4 +1,4 @@
-"""Controller-specific data type definitions."""
+"""Domain models for business logic."""
 
 from dataclasses import dataclass
 from datetime import datetime
