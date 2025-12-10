@@ -11,6 +11,8 @@ from cli.models import (
     DeleteCommand,
     DeleteTagsCommand,
     ListCommand,
+    RegisterCommand,
+    LoginCommand,
 )
 
 
@@ -55,6 +57,10 @@ def parse_command(input_line: str) -> CommandRequest:
         return _parse_add_tags(tokens[1:])
     elif command_name == "delete-tags":
         return _parse_delete_tags(tokens[1:])
+    elif command_name == "register":
+        return _parse_register(tokens[1:])
+    elif command_name == "login":
+        return _parse_login(tokens[1:])
     else:
         raise ParseError(f"Unknown command: {command_name}")
 
@@ -152,3 +158,21 @@ def _find_separator(args: list[str]) -> int:
         return args.index("--")
     except ValueError:
         return -1
+
+
+def _parse_register(args: list[str]) -> RegisterCommand:
+    """Parse 'register <username> <password>' command."""
+    if len(args) != 2:
+        raise ParseError("register requires exactly 2 arguments: <username> <password>")
+
+    username, password = args
+    return RegisterCommand(username=username, password=password)
+
+
+def _parse_login(args: list[str]) -> LoginCommand:
+    """Parse 'login <username> <password>' command."""
+    if len(args) != 2:
+        raise ParseError("login requires exactly 2 arguments: <username> <password>")
+
+    username, password = args
+    return LoginCommand(username=username, password=password)

@@ -47,4 +47,30 @@ class DeleteTagsCommand:
     command: Literal["delete-tags"] = "delete-tags"
 
 
-CommandRequest = AddCommand | DeleteCommand | ListCommand | AddTagsCommand | DeleteTagsCommand
+@dataclass(frozen=True)
+class RegisterCommand:
+    """Register a new user account."""
+
+    username: str
+    password: str
+    command: Literal["register"] = "register"
+
+
+@dataclass(frozen=True)
+class LoginCommand:
+    """Login with username and password."""
+
+    username: str
+    password: str
+    command: Literal["login"] = "login"
+
+
+CommandRequest = (
+    AddCommand
+    | DeleteCommand
+    | ListCommand
+    | AddTagsCommand
+    | DeleteTagsCommand
+    | RegisterCommand
+    | LoginCommand
+)
