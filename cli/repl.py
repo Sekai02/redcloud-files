@@ -12,6 +12,8 @@ from cli.commands import (
     handle_delete,
     handle_delete_tags,
     handle_list,
+    handle_register,
+    handle_login,
 )
 from cli.constants import (
     COMMANDS,
@@ -28,6 +30,8 @@ from cli.models import (
     DeleteCommand,
     DeleteTagsCommand,
     ListCommand,
+    RegisterCommand,
+    LoginCommand,
 )
 from cli.parser import ParseError, parse_command
 
@@ -47,7 +51,11 @@ def show_logo() -> None:
 
 def dispatch_command(cmd_obj) -> str:
     """Dispatch parsed command to appropriate handler."""
-    if isinstance(cmd_obj, AddCommand):
+    if isinstance(cmd_obj, RegisterCommand):
+        return handle_register(cmd_obj)
+    elif isinstance(cmd_obj, LoginCommand):
+        return handle_login(cmd_obj)
+    elif isinstance(cmd_obj, AddCommand):
         return handle_add(cmd_obj)
     elif isinstance(cmd_obj, DeleteCommand):
         return handle_delete(cmd_obj)
