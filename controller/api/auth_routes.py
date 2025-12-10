@@ -8,6 +8,7 @@ from controller.models.api_models import (
     LoginRequest,
     LoginResponse
 )
+from controller.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -29,7 +30,10 @@ async def register(request: RegisterRequest):
         - 400: Username already exists
         - 500: Internal server error
     """
-    raise NotImplementedError("User registration not implemented")
+    auth_service = AuthService()
+    api_key, user_id = auth_service.register_user(request.username, request.password)
+    
+    return RegisterResponse(api_key=api_key, user_id=user_id)
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -48,4 +52,7 @@ async def login(request: LoginRequest):
         - 401: Invalid credentials
         - 500: Internal server error
     """
-    raise NotImplementedError("User login not implemented")
+    auth_service = AuthService()
+    api_key = auth_service.login_user(request.username, request.password)
+    
+    return LoginResponse(api_key=api_key)
