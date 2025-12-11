@@ -61,6 +61,10 @@ def init_database() -> None:
             )
         """)
 
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_files_owner_name ON files(owner_id, name)
+        """)
+
         conn.commit()
 
 

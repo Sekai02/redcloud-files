@@ -16,3 +16,4 @@ class FileMetadata:
     tags: List[str]
     owner_id: str
     created_at: datetime
+    replaced_file_id: str = None

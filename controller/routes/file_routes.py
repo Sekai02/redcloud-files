@@ -70,6 +70,7 @@ async def upload_file(
         name=file_metadata.name,
         size=file_metadata.size,
         tags=file_metadata.tags,
+        replaced_file_id=file_metadata.replaced_file_id,
     )
 
 
