@@ -1,0 +1,11 @@
+#!/bin/bash
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
+
+echo "Starting RedCloud Files Chunkserver..."
+echo "Port: 50051"
+echo "Data directory: ./data/chunks/"
+echo ""
+
+exec python3 -m chunkserver.main

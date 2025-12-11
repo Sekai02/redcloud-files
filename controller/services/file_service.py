@@ -1,8 +1,12 @@
 """File service for business logic."""
 
 from datetime import datetime
-from typing import List, BinaryIO
+from typing import List, BinaryIO, AsyncIterator
 import hashlib
+import logging
+import json
+from pathlib import Path
+import asyncio
 
 from controller.repositories.file_repository import FileRepository, File
 from controller.repositories.tag_repository import TagRepository
@@ -10,8 +14,11 @@ from controller.repositories.chunk_repository import ChunkRepository, Chunk
 from controller.database import get_db_connection
 from controller.exceptions import FileNotFoundError, UnauthorizedAccessError
 from controller.domain import FileMetadata
+from controller.chunkserver_client import ChunkserverClient
 from common.types import ChunkDescriptor
 from common.constants import CHUNK_SIZE_BYTES
+
+logger = logging.getLogger(__name__)
 
 
 class FileService:
@@ -19,8 +26,9 @@ class FileService:
         self.file_repo = FileRepository()
         self.tag_repo = TagRepository()
         self.chunk_repo = ChunkRepository()
+        self.chunkserver_client = ChunkserverClient()
 
-    def upload_file(
+    async def upload_file(
         self,
         file_name: str,
         file_data: BinaryIO,
@@ -33,27 +41,58 @@ class FileService:
         file_id = generate_uuid()
         created_at = datetime.utcnow()
         
-        chunks = self._split_into_chunks(file_data, file_id)
+        chunks_with_data = self._split_into_chunks_with_data(file_data, file_id)
         
-        with get_db_connection() as conn:
-            try:
-                self.file_repo.create_file(
-                    file_id=file_id,
-                    name=file_name,
-                    size=file_size,
-                    owner_id=owner_id,
-                    created_at=created_at,
-                    conn=conn,
+        written_chunk_ids = []
+        
+        try:
+            for chunk_meta, chunk_data in chunks_with_data:
+                success = await self.chunkserver_client.write_chunk(
+                    chunk_id=chunk_meta.chunk_id,
+                    file_id=chunk_meta.file_id,
+                    chunk_index=chunk_meta.chunk_index,
+                    data=chunk_data,
+                    checksum=chunk_meta.checksum
                 )
                 
-                self.tag_repo.add_tags(file_id, tags, conn=conn)
+                if not success:
+                    raise Exception(f"Failed to write chunk {chunk_meta.chunk_id} to chunkserver")
                 
-                self.chunk_repo.create_chunks(chunks, conn=conn)
-                
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                raise
+                written_chunk_ids.append(chunk_meta.chunk_id)
+                logger.info(f"Wrote chunk {chunk_meta.chunk_index}/{len(chunks_with_data)} for file {file_id}")
+            
+            with get_db_connection() as conn:
+                try:
+                    self.file_repo.create_file(
+                        file_id=file_id,
+                        name=file_name,
+                        size=file_size,
+                        owner_id=owner_id,
+                        created_at=created_at,
+                        conn=conn,
+                    )
+                    
+                    self.tag_repo.add_tags(file_id, tags, conn=conn)
+                    
+                    self.chunk_repo.create_chunks(
+                        [chunk_meta for chunk_meta, _ in chunks_with_data],
+                        conn=conn
+                    )
+                    
+                    conn.commit()
+                    logger.info(f"Successfully uploaded file {file_id} with {len(chunks_with_data)} chunks")
+                except Exception as e:
+                    conn.rollback()
+                    raise
+                    
+        except Exception as e:
+            logger.error(f"Upload failed for file {file_id}: {e}")
+            
+            if written_chunk_ids:
+                logger.info(f"Cleaning up {len(written_chunk_ids)} orphaned chunks")
+                await self._cleanup_chunks(written_chunk_ids)
+            
+            raise
         
         return FileMetadata(
             file_id=file_id,
@@ -64,7 +103,7 @@ class FileService:
             created_at=created_at,
         )
 
-    def _split_into_chunks(self, file_data: BinaryIO, file_id: str) -> List[Chunk]:
+    def _split_into_chunks_with_data(self, file_data: BinaryIO, file_id: str) -> List[tuple[Chunk, bytes]]:
         from controller.utils import generate_uuid
         
         chunks = []
@@ -78,19 +117,139 @@ class FileService:
             chunk_id = generate_uuid()
             checksum = hashlib.sha256(chunk_data).hexdigest()
             
-            chunks.append(Chunk(
+            chunk_meta = Chunk(
                 chunk_id=chunk_id,
                 file_id=file_id,
                 chunk_index=chunk_index,
                 size=len(chunk_data),
                 checksum=checksum,
-            ))
+            )
             
+            chunks.append((chunk_meta, chunk_data))
             chunk_index += 1
         
         return chunks
 
-    def download_file(self, file_id: str, user_id: str) -> tuple[File, List[ChunkDescriptor]]:
+    async def _cleanup_chunks(self, chunk_ids: List[str]) -> List[str]:
+        """
+        Delete chunks from chunkserver with retry logic.
+        
+        Args:
+            chunk_ids: List of chunk IDs to delete
+            
+        Returns:
+            List of chunk IDs that could not be deleted
+        """
+        failed_deletions = []
+        
+        for chunk_id in chunk_ids:
+            max_attempts = 3
+            deleted = False
+            
+            for attempt in range(max_attempts):
+                try:
+                    await self.chunkserver_client.delete_chunk(chunk_id)
+                    logger.info(f"Deleted orphaned chunk {chunk_id}")
+                    deleted = True
+                    break
+                except Exception as e:
+                    if attempt < max_attempts - 1:
+                        delay = 2 ** attempt
+                        logger.warning(f"Failed to delete chunk {chunk_id}, retrying in {delay}s: {e}")
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(f"Failed to delete orphaned chunk {chunk_id} after {max_attempts} attempts: {e}")
+            
+            if not deleted:
+                failed_deletions.append(chunk_id)
+        
+        if failed_deletions:
+            await self._log_orphaned_chunks(failed_deletions)
+        
+        return failed_deletions
+    
+    async def _log_orphaned_chunks(self, chunk_ids: List[str]) -> None:
+        """
+        Log orphaned chunks that could not be deleted.
+        
+        Args:
+            chunk_ids: List of chunk IDs that failed deletion
+        """
+        orphaned_log_path = Path("./data/orphaned_chunks.json")
+        
+        try:
+            if orphaned_log_path.exists():
+                with open(orphaned_log_path, 'r') as f:
+                    orphaned_data = json.load(f)
+            else:
+                orphaned_data = []
+            
+            for chunk_id in chunk_ids:
+                orphaned_data.append({
+                    "chunk_id": chunk_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "reason": "Failed cleanup after upload failure or file deletion"
+                })
+            
+            orphaned_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(orphaned_log_path, 'w') as f:
+                json.dump(orphaned_data, f, indent=2)
+            
+            logger.warning(f"Logged {len(chunk_ids)} orphaned chunks to {orphaned_log_path}")
+        except Exception as e:
+            logger.error(f"Failed to log orphaned chunks: {e}")
+
+    async def download_file(self, file_id: str, user_id: str) -> tuple[File, AsyncIterator[bytes]]:
+        file = self.file_repo.get_by_id(file_id)
+        if file is None:
+            raise FileNotFoundError(f"File {file_id} not found")
+        
+        if file.owner_id != user_id:
+            raise UnauthorizedAccessError(f"User {user_id} does not own file {file_id}")
+        
+        chunks = self.chunk_repo.get_chunks_by_file(file_id)
+        
+        async def stream_file_data():
+            for chunk in chunks:
+                logger.info(f"Streaming chunk {chunk.chunk_index}/{len(chunks)} for file {file_id}")
+                try:
+                    async for piece in self.chunkserver_client.read_chunk(chunk.chunk_id):
+                        yield piece
+                except FileNotFoundError:
+                    logger.error(f"Chunk {chunk.chunk_id} not found, validating file integrity")
+                    is_valid = await self.validate_file_integrity(file_id)
+                    if not is_valid:
+                        logger.error(f"File {file_id} is corrupted")
+                    raise
+        
+        return file, stream_file_data()
+    
+    async def validate_file_integrity(self, file_id: str) -> bool:
+        """
+        Validate that all chunks for a file exist on chunkserver.
+        
+        Args:
+            file_id: UUID of file to validate
+            
+        Returns:
+            True if all chunks exist, False if any are missing
+        """
+        chunks = self.chunk_repo.get_chunks_by_file(file_id)
+        
+        for chunk in chunks:
+            try:
+                available = await self.chunkserver_client.ping()
+                if not available:
+                    logger.warning(f"Chunkserver unavailable during validation")
+                    return True
+                
+            except Exception as e:
+                logger.warning(f"Cannot validate chunk {chunk.chunk_id}: {e}")
+                return False
+        
+        return True
+
+    def get_chunk_descriptors(self, file_id: str, user_id: str) -> List[ChunkDescriptor]:
         file = self.file_repo.get_by_id(file_id)
         if file is None:
             raise FileNotFoundError(f"File {file_id} not found")
@@ -110,12 +269,17 @@ class FileService:
             for chunk in chunks
         ]
         
-        return file, chunk_descriptors
+        return chunk_descriptors
 
-    def delete_files(self, tags: List[str], user_id: str) -> List[str]:
+    async def delete_files(self, tags: List[str], user_id: str) -> List[str]:
         files = self.file_repo.query_by_tags_and_owner(tags, user_id)
         
         deleted_file_ids = []
+        chunks_to_delete = []
+        
+        for file in files:
+            chunks = self.chunk_repo.get_chunks_by_file(file.file_id)
+            chunks_to_delete.extend([chunk.chunk_id for chunk in chunks])
         
         with get_db_connection() as conn:
             try:
@@ -127,6 +291,10 @@ class FileService:
             except Exception as e:
                 conn.rollback()
                 raise
+        
+        if chunks_to_delete:
+            logger.info(f"Deleting {len(chunks_to_delete)} chunks from chunkserver")
+            await self._cleanup_chunks(chunks_to_delete)
         
         return deleted_file_ids
 

@@ -2,10 +2,80 @@
 Loads chunk index, starts RPC server to handle controller requests.
 """
 
-def main() -> None:
-    """Bootstrap chunkserver service (stub)."""
-    # TODO: load chunk index from disk, start RPC server.
-    pass
+import asyncio
+import logging
+import signal
+from pathlib import Path
 
-if __name__ == "__main__":  # pragma: no cover
+from common.constants import CHUNKSERVER_PORT
+from chunkserver.chunk_index import ChunkIndex
+from chunkserver.grpc_server import create_server
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+async def serve(chunk_index: ChunkIndex) -> None:
+    """
+    Start and run gRPC server.
+    
+    Args:
+        chunk_index: Initialized ChunkIndex instance
+    """
+    server = create_server(chunk_index)
+    listen_addr = f'[::]:{CHUNKSERVER_PORT}'
+    server.add_insecure_port(listen_addr)
+    
+    logger.info(f"Starting chunkserver on {listen_addr}")
+    await server.start()
+    
+    async def shutdown(sig):
+        logger.info(f"Received signal {sig}, shutting down...")
+        await server.stop(5)
+        chunk_index.save_to_disk()
+        logger.info("Chunkserver stopped")
+    
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s)))
+    
+    await server.wait_for_termination()
+
+
+def main() -> None:
+    """Bootstrap chunkserver service."""
+    logger.info("Initializing chunkserver...")
+    
+    chunk_index = ChunkIndex()
+    
+    try:
+        loaded = chunk_index.load_from_disk()
+        if loaded:
+            logger.info(f"Loaded {chunk_index.count()} chunks from index")
+        else:
+            logger.warning("No index file found, starting with empty index")
+    except Exception as e:
+        logger.error(f"Failed to load index from disk: {e}")
+        logger.info("Attempting to rebuild index from chunks directory...")
+        try:
+            count = chunk_index.rebuild_from_directory(verify_checksums=False)
+            logger.info(f"Rebuilt index with {count} chunks")
+            chunk_index.save_to_disk()
+        except Exception as rebuild_error:
+            logger.error(f"Failed to rebuild index: {rebuild_error}")
+            logger.warning("Starting with empty index")
+    
+    try:
+        asyncio.run(serve(chunk_index))
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt")
+    except Exception as e:
+        logger.error(f"Server error: {e}", exc_info=True)
+        raise
+
+
+if __name__ == "__main__":
     main()

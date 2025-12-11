@@ -1,6 +1,7 @@
 """Entry point for the Controller service."""
 
 import uvicorn
+import asyncio
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
@@ -8,6 +9,7 @@ from controller.config import CONTROLLER_HOST, CONTROLLER_PORT
 from controller.database import init_database
 from controller.routes.auth_routes import router as auth_router
 from controller.routes.file_routes import router as file_router
+from controller.cleanup_task import OrphanedChunkCleaner
 from controller.exceptions import (
     DFSException,
     UserAlreadyExistsError,
@@ -28,13 +30,24 @@ app = FastAPI(
     version="1.0.0"
 )
 
+cleanup_task = OrphanedChunkCleaner()
+
 
 @app.on_event("startup")
 async def startup_event():
     """
-    Initialize database on application startup.
+    Initialize database and start background tasks on application startup.
     """
     init_database()
+    await cleanup_task.start()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    Cleanup resources on application shutdown.
+    """
+    await cleanup_task.stop()
 
 
 @app.exception_handler(UserAlreadyExistsError)

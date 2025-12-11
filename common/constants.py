@@ -1,4 +1,17 @@
 """Project-wide constants (e.g., CHUNK_SIZE, default ports)."""
 
 CHUNK_SIZE_BYTES: int = 4 * 1024 * 1024
-# TODO: Define network ports, timeouts, protocol versions.
+
+STREAM_PIECE_SIZE_BYTES: int = 64 * 1024
+
+CONTROLLER_PORT: int = 8000
+CHUNKSERVER_PORT: int = 50051
+
+CHUNKSERVER_SERVICE_NAME: str = "localhost"
+CONTROLLER_SERVICE_NAME: str = "localhost"
+
+CHUNKSERVER_TIMEOUT_SECONDS: int = 30
+GRPC_KEEPALIVE_TIME_MS: int = 60000
+GRPC_KEEPALIVE_TIMEOUT_MS: int = 10000
+
+CHECKSUM_ALGORITHM: str = "sha256"
