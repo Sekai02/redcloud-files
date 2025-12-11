@@ -61,8 +61,25 @@ class FileService:
                 written_chunk_ids.append(chunk_meta.chunk_id)
                 logger.info(f"Wrote chunk {chunk_meta.chunk_index}/{len(chunks_with_data)} for file {file_id}")
             
+            replaced_file_id = None
+            old_chunk_ids = []
+            
             with get_db_connection() as conn:
                 try:
+                    existing_file = self.file_repo.find_by_owner_and_name(
+                        owner_id=owner_id,
+                        name=file_name,
+                        conn=conn
+                    )
+                    
+                    if existing_file:
+                        replaced_file_id = existing_file.file_id
+                        old_chunks = self.chunk_repo.get_chunks_by_file(replaced_file_id)
+                        old_chunk_ids = [chunk.chunk_id for chunk in old_chunks]
+                        
+                        self.file_repo.delete_file(replaced_file_id, conn=conn)
+                        logger.info(f"Replacing existing file {replaced_file_id} with new file {file_id}")
+                    
                     self.file_repo.create_file(
                         file_id=file_id,
                         name=file_name,
@@ -84,6 +101,10 @@ class FileService:
                 except Exception as e:
                     conn.rollback()
                     raise
+            
+            if old_chunk_ids:
+                logger.info(f"Cleaning up {len(old_chunk_ids)} chunks from replaced file")
+                await self._cleanup_chunks(old_chunk_ids)
                     
         except Exception as e:
             logger.error(f"Upload failed for file {file_id}: {e}")
@@ -101,6 +122,7 @@ class FileService:
             tags=tags,
             owner_id=owner_id,
             created_at=created_at,
+            replaced_file_id=replaced_file_id,
         )
 
     def _split_into_chunks_with_data(self, file_data: BinaryIO, file_id: str) -> List[tuple[Chunk, bytes]]:
