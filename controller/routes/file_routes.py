@@ -57,7 +57,7 @@ async def upload_file(
     from io import BytesIO
     file_data = BytesIO(file_content)
     
-    file_metadata = file_service.upload_file(
+    file_metadata = await file_service.upload_file(
         file_name=file.filename,
         file_data=file_data,
         file_size=file_size,
@@ -139,14 +139,10 @@ async def download_file(
     """
     file_service = FileService()
     
-    file, chunk_descriptors = file_service.download_file(file_id, current_user)
-    
-    async def chunk_generator():
-        for chunk_desc in chunk_descriptors:
-            yield b""
+    file, stream_generator = await file_service.download_file(file_id, current_user)
     
     return StreamingResponse(
-        chunk_generator(),
+        stream_generator,
         media_type="application/octet-stream",
         headers={
             "Content-Disposition": f'attachment; filename="{file.name}"',
@@ -181,7 +177,7 @@ async def delete_files(
     
     tag_list = parse_tags(tags)
     
-    deleted_file_ids = file_service.delete_files(tag_list, current_user)
+    deleted_file_ids = await file_service.delete_files(tag_list, current_user)
     
     return DeleteFilesResponse(
         deleted_count=len(deleted_file_ids),
