@@ -7,6 +7,7 @@ from controller.repositories.tag_repository import TagRepository
 from controller.database import get_db_connection
 from controller.domain import FileMetadata
 from controller.exceptions import InvalidTagQueryError
+from controller.schemas.files import SkippedFileInfo
 
 
 class TagService:
@@ -53,7 +54,20 @@ class TagService:
         
         return file_ids
 
-    def remove_tags_from_files(self, query_tags: List[str], tags_to_remove: List[str], user_id: str) -> List[str]:
+    def remove_tags_from_files(self, query_tags: List[str], tags_to_remove: List[str], user_id: str) -> tuple[List[str], List[SkippedFileInfo]]:
+        """
+        Remove tags from files matching query.
+        
+        Args:
+            query_tags: Tags to query files (AND logic)
+            tags_to_remove: Tags to remove from matching files
+            user_id: Owner ID of files
+            
+        Returns:
+            Tuple of (updated_file_ids, skipped_files)
+            - updated_file_ids: Files where tags were successfully removed
+            - skipped_files: SkippedFileInfo objects for files that would become tagless
+        """
         if not query_tags:
             raise InvalidTagQueryError("Query tags cannot be empty")
         if not tags_to_remove:
@@ -61,13 +75,27 @@ class TagService:
         
         file_ids = self.tag_repo.query_files_by_tags(query_tags, user_id)
         
+        updated_file_ids = []
+        skipped_files = []
+        
         with get_db_connection() as conn:
             try:
                 for file_id in file_ids:
-                    self.tag_repo.delete_tags(file_id, tags_to_remove, conn=conn)
+                    if self.tag_repo.would_become_tagless(file_id, tags_to_remove, conn=conn):
+                        file = self.file_repo.get_by_id(file_id)
+                        if file:
+                            current_tags = self.tag_repo.get_tags_for_file(file_id)
+                            skipped_files.append(SkippedFileInfo(
+                                file_id=file_id,
+                                name=file.name,
+                                current_tags=current_tags
+                            ))
+                    else:
+                        self.tag_repo.delete_tags(file_id, tags_to_remove, conn=conn)
+                        updated_file_ids.append(file_id)
                 conn.commit()
             except Exception as e:
                 conn.rollback()
                 raise
         
-        return file_ids
+        return updated_file_ids, skipped_files

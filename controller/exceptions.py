@@ -50,6 +50,13 @@ class ChunkserverUnavailableError(DFSException):
     pass
 
 
+class EmptyTagListError(DFSException):
+    """
+    Raised when attempting to create or update a file with an empty tag list.
+    """
+    pass
+
+
 class InvalidTagQueryError(DFSException):
     """
     Raised when a tag query is malformed or invalid.

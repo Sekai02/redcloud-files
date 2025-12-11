@@ -52,7 +52,15 @@ class DeleteTagsRequest(BaseModel):
     tags_to_remove: List[str]
 
 
+class SkippedFileInfo(BaseModel):
+    """Information about a file skipped during tag deletion."""
+    file_id: str
+    name: str
+    current_tags: List[str]
+
+
 class DeleteTagsResponse(BaseModel):
     """Response model for deleting tags."""
     updated_count: int
     file_ids: List[str]
+    skipped_files: List[SkippedFileInfo] = []

@@ -450,13 +450,26 @@ class ControllerClient:
                 data = response.json()
                 updated_count = data['updated_count']
                 file_ids = data['file_ids']
+                skipped_files = data.get('skipped_files', [])
 
-                if updated_count == 0:
+                if updated_count == 0 and len(skipped_files) == 0:
                     return "No files updated. No files matched the query."
 
-                tags_str = ', '.join(tags_to_remove)
-                file_ids_str = ', '.join([fid[:8] + '...' for fid in file_ids])
-                return f"Removed tags [{tags_str}] from {updated_count} file(s).\nFile IDs: {file_ids_str}"
+                output = []
+                
+                if updated_count > 0:
+                    tags_str = ', '.join(tags_to_remove)
+                    file_ids_str = ', '.join([fid[:8] + '...' for fid in file_ids])
+                    output.append(f"Removed tags [{tags_str}] from {updated_count} file(s).")
+                    output.append(f"File IDs: {file_ids_str}")
+                
+                if skipped_files:
+                    output.append("\nSkipped files (would become tagless):")
+                    for skip in skipped_files:
+                        output.append(f"  - {skip['name']} (ID: {skip['file_id'][:8]}...)")
+                        output.append(f"    Current tags: {', '.join(skip['current_tags'])}")
+                
+                return '\n'.join(output)
             else:
                 return f"Error: {self._format_error(response)}"
 
