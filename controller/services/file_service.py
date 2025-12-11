@@ -12,7 +12,7 @@ from controller.repositories.file_repository import FileRepository, File
 from controller.repositories.tag_repository import TagRepository
 from controller.repositories.chunk_repository import ChunkRepository, Chunk
 from controller.database import get_db_connection
-from controller.exceptions import FileNotFoundError, UnauthorizedAccessError
+from controller.exceptions import FileNotFoundError, UnauthorizedAccessError, EmptyTagListError
 from controller.domain import FileMetadata
 from controller.chunkserver_client import ChunkserverClient
 from common.types import ChunkDescriptor
@@ -36,6 +36,9 @@ class FileService:
         tags: List[str],
         owner_id: str,
     ) -> FileMetadata:
+        if not tags:
+            raise EmptyTagListError("At least one tag is required for file upload")
+        
         from controller.utils import generate_uuid
         
         file_id = generate_uuid()

@@ -40,6 +40,44 @@ class TagRepository:
             return [row["tag"] for row in rows]
 
     @staticmethod
+    def would_become_tagless(file_id: str, tags_to_remove: List[str], conn=None) -> bool:
+        """
+        Check if removing specified tags would leave file with zero tags.
+        
+        Args:
+            file_id: UUID of the file
+            tags_to_remove: List of tags to be removed
+            conn: Optional database connection
+            
+        Returns:
+            True if file would have no tags remaining, False otherwise
+        """
+        should_close = conn is None
+        if conn is None:
+            conn = get_db_connection().__enter__()
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) as count FROM tags WHERE file_id = ?",
+                (file_id,)
+            )
+            total_tags = cursor.fetchone()["count"]
+            
+            if total_tags == 0:
+                return True
+            
+            placeholders = ','.join('?' for _ in tags_to_remove)
+            query = f"SELECT COUNT(*) as count FROM tags WHERE file_id = ? AND tag IN ({placeholders})"
+            cursor.execute(query, [file_id] + tags_to_remove)
+            tags_to_remove_count = cursor.fetchone()["count"]
+            
+            return total_tags - tags_to_remove_count == 0
+        finally:
+            if should_close:
+                conn.close()
+
+    @staticmethod
     def delete_tags(file_id: str, tags: List[str], conn=None) -> None:
         if not tags:
             return

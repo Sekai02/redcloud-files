@@ -1,9 +1,10 @@
 """File operation API routes."""
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status, HTTPException
 from fastapi.responses import StreamingResponse
 
 from controller.auth import get_current_user
+from controller.exceptions import EmptyTagListError
 from controller.schemas.files import (
     AddFileResponse,
     ListFilesResponse,
@@ -50,6 +51,12 @@ async def upload_file(
     file_service = FileService()
     
     tag_list = parse_tags(tags)
+    
+    if not tag_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one tag is required for file upload"
+        )
     
     file_content = await file.read()
     file_size = len(file_content)
@@ -239,6 +246,7 @@ async def delete_tags(
     Returns:
         - updated_count: Number of files updated
         - file_ids: List of updated file UUIDs
+        - skipped_files: List of file UUIDs skipped to prevent becoming tagless
                    (only updates files owned by current user)
 
     Raises:
@@ -248,7 +256,7 @@ async def delete_tags(
     """
     tag_service = TagService()
     
-    updated_file_ids = tag_service.remove_tags_from_files(
+    updated_file_ids, skipped_files = tag_service.remove_tags_from_files(
         request.query_tags,
         request.tags_to_remove,
         current_user
@@ -257,4 +265,5 @@ async def delete_tags(
     return DeleteTagsResponse(
         updated_count=len(updated_file_ids),
         file_ids=updated_file_ids,
+        skipped_files=skipped_files,
     )
