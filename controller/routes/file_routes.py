@@ -15,6 +15,7 @@ from controller.schemas.files import (
     DeleteTagsResponse,
     FileMetadataResponse
 )
+from controller.repositories.file_repository import FileRepository
 from controller.services.file_service import FileService
 from controller.services.tag_service import TagService
 from controller.utils import parse_tags
@@ -148,6 +149,49 @@ async def download_file(
     file_service = FileService()
     
     file, stream_generator = await file_service.download_file(file_id, current_user)
+    
+    return StreamingResponse(
+        stream_generator,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{file.name}"',
+            "Content-Length": str(file.size),
+        }
+    )
+
+
+@router.get("/by-name/{filename}/download")
+async def download_file_by_name(
+    filename: str,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Download a file by filename.
+
+    Parameters:
+        - filename: Name of file to download
+        - Authorization header: Bearer <api_key> (required)
+
+    Returns:
+        - StreamingResponse with file data
+
+    Raises:
+        - 401: Invalid or missing API Key
+        - 403: User does not own this file
+        - 404: File not found
+        - 500: Internal server error
+        - 503: Chunkserver unavailable
+    """
+    from controller.exceptions import FileNotFoundError
+    
+    file_service = FileService()
+    file_repo = FileRepository()
+    
+    file_record = file_repo.find_by_owner_and_name(current_user, filename)
+    if not file_record:
+        raise FileNotFoundError(f"File '{filename}' not found")
+    
+    file, stream_generator = await file_service.download_file(file_record.file_id, current_user)
     
     return StreamingResponse(
         stream_generator,

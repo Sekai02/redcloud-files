@@ -76,11 +76,7 @@ class FileRepository:
 
     @staticmethod
     def find_by_owner_and_name(owner_id: str, name: str, conn=None) -> Optional[File]:
-        should_close = conn is None
-        if conn is None:
-            conn = get_db_connection().__enter__()
-        
-        try:
+        if conn is not None:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT file_id, name, size, owner_id, created_at FROM files WHERE owner_id = ? AND name = ?",
@@ -98,9 +94,25 @@ class FileRepository:
                 owner_id=row["owner_id"],
                 created_at=datetime.fromisoformat(row["created_at"]),
             )
-        finally:
-            if should_close:
-                conn.close()
+        else:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT file_id, name, size, owner_id, created_at FROM files WHERE owner_id = ? AND name = ?",
+                    (owner_id, name)
+                )
+                row = cursor.fetchone()
+                
+                if row is None:
+                    return None
+                
+                return File(
+                    file_id=row["file_id"],
+                    name=row["name"],
+                    size=row["size"],
+                    owner_id=row["owner_id"],
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                )
 
     @staticmethod
     def delete_file(file_id: str, conn=None) -> None:

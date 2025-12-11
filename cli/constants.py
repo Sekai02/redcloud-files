@@ -2,7 +2,7 @@
 
 from prompt_toolkit.styles import Style
 
-COMMANDS = ["register", "login", "add", "delete", "list", "add-tags", "delete-tags", "clear", "exit", "help"]
+COMMANDS = ["register", "login", "add", "delete", "list", "add-tags", "delete-tags", "download", "clear", "exit", "help"]
 
 STYLE = Style.from_dict(
     {
@@ -36,6 +36,7 @@ HELP_TEXT = """Available commands:
   list tag-query                      List files matching tag query (empty = all)
   add-tags tag-query tag-list         Add tags to files matching tag query
   delete-tags tag-query tag-list      Remove tags from files matching tag query
+  download <filename> [output_path]   Download file by name to local path
   clear                               Clear screen and redisplay welcome message
   help                                Show this help
   exit                                Exit REPL
@@ -48,6 +49,8 @@ Examples:
   add file1.txt file2.txt important work
   list important
   add-tags important -- urgent
+  download document.pdf
+  download report.txt ./downloads/
   delete-tags work urgent -- archived
   delete archived"""
 

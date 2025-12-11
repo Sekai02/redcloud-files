@@ -14,6 +14,7 @@ from cli.commands import (
     handle_list,
     handle_register,
     handle_login,
+    handle_download,
 )
 from cli.constants import (
     COMMANDS,
@@ -32,6 +33,7 @@ from cli.models import (
     ListCommand,
     RegisterCommand,
     LoginCommand,
+    DownloadCommand,
 )
 from cli.parser import ParseError, parse_command
 
@@ -65,6 +67,8 @@ def dispatch_command(cmd_obj) -> str:
         return handle_add_tags(cmd_obj)
     elif isinstance(cmd_obj, DeleteTagsCommand):
         return handle_delete_tags(cmd_obj)
+    elif isinstance(cmd_obj, DownloadCommand):
+        return handle_download(cmd_obj)
     else:
         return f"Unknown command type: {type(cmd_obj)}"
 

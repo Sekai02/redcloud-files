@@ -13,6 +13,7 @@ from cli.models import (
     ListCommand,
     RegisterCommand,
     LoginCommand,
+    DownloadCommand,
 )
 
 
@@ -61,6 +62,8 @@ def parse_command(input_line: str) -> CommandRequest:
         return _parse_register(tokens[1:])
     elif command_name == "login":
         return _parse_login(tokens[1:])
+    elif command_name == "download":
+        return _parse_download(tokens[1:])
     else:
         raise ParseError(f"Unknown command: {command_name}")
 
@@ -176,3 +179,14 @@ def _parse_login(args: list[str]) -> LoginCommand:
 
     username, password = args
     return LoginCommand(username=username, password=password)
+
+
+def _parse_download(args: list[str]) -> DownloadCommand:
+    """Parse 'download <filename> [output_path]' command."""
+    if len(args) < 1:
+        raise ParseError("download requires at least 1 argument: <filename> [output_path]")
+    
+    filename = args[0]
+    output_path = args[1] if len(args) > 1 else None
+    
+    return DownloadCommand(filename=filename, output_path=output_path)
