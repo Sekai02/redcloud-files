@@ -228,25 +228,45 @@ class FileService:
         file = self.file_repo.get_by_id(file_id)
         if file is None:
             raise FileNotFoundError(f"File {file_id} not found")
-        
+
         if file.owner_id != user_id:
             raise UnauthorizedAccessError(f"User {user_id} does not own file {file_id}")
-        
+
         chunks = self.chunk_repo.get_chunks_by_file(file_id)
-        
+
+        if not chunks:
+            logger.warning(f"File {file_id} has no chunks in database")
+            raise FileNotFoundError(f"File {file_id} has no data")
+
         async def stream_file_data():
+            total_chunks = len(chunks)
+            bytes_streamed = 0
+
+            logger.info(f"Starting download of file {file_id} ({total_chunks} chunks, {file.size} bytes)")
+
             for chunk in chunks:
-                logger.info(f"Streaming chunk {chunk.chunk_index}/{len(chunks)} for file {file_id}")
+                chunk_num = chunk.chunk_index + 1
+                logger.info(f"Streaming chunk {chunk_num}/{total_chunks} (chunk_id={chunk.chunk_id})")
+
                 try:
                     async for piece in self.chunkserver_client.read_chunk(chunk.chunk_id):
+                        bytes_streamed += len(piece)
                         yield piece
                 except FileNotFoundError:
-                    logger.error(f"Chunk {chunk.chunk_id} not found, validating file integrity")
-                    is_valid = await self.validate_file_integrity(file_id)
-                    if not is_valid:
-                        logger.error(f"File {file_id} is corrupted")
+                    logger.error(
+                        f"Chunk {chunk.chunk_id} (index {chunk.chunk_index}) not found on chunkserver. "
+                        f"Downloaded {bytes_streamed}/{file.size} bytes before failure."
+                    )
                     raise
-        
+                except Exception as e:
+                    logger.error(
+                        f"Error streaming chunk {chunk.chunk_id} (index {chunk.chunk_index}): {e}. "
+                        f"Downloaded {bytes_streamed}/{file.size} bytes before failure."
+                    )
+                    raise
+
+            logger.info(f"Successfully streamed file {file_id}: {bytes_streamed} bytes total")
+
         return file, stream_file_data()
     
     async def validate_file_integrity(self, file_id: str) -> bool:

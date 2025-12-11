@@ -146,18 +146,34 @@ async def download_file(
         - 500: Internal server error
         - 503: Chunkserver unavailable
     """
-    file_service = FileService()
-    
-    file, stream_generator = await file_service.download_file(file_id, current_user)
-    
-    return StreamingResponse(
-        stream_generator,
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{file.name}"',
-            "Content-Length": str(file.size),
-        }
+    from controller.exceptions import (
+        FileNotFoundError,
+        UnauthorizedAccessError,
+        ChunkserverUnavailableError
     )
+
+    file_service = FileService()
+
+    try:
+        file, stream_generator = await file_service.download_file(file_id, current_user)
+
+        return StreamingResponse(
+            stream_generator,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file.name}"',
+                "Content-Length": str(file.size),
+            }
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except UnauthorizedAccessError:
+        raise HTTPException(status_code=403, detail="You do not have permission to download this file")
+    except ChunkserverUnavailableError:
+        raise HTTPException(status_code=503, detail="Storage service temporarily unavailable")
+    except Exception as e:
+        logger.error(f"Unexpected error during download of {file_id}: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while downloading the file")
 
 
 @router.get("/by-name/{filename}/download")
@@ -182,25 +198,39 @@ async def download_file_by_name(
         - 500: Internal server error
         - 503: Chunkserver unavailable
     """
-    from controller.exceptions import FileNotFoundError
-    
+    from controller.exceptions import (
+        FileNotFoundError,
+        UnauthorizedAccessError,
+        ChunkserverUnavailableError
+    )
+
     file_service = FileService()
     file_repo = FileRepository()
-    
-    file_record = file_repo.find_by_owner_and_name(current_user, filename)
-    if not file_record:
-        raise FileNotFoundError(f"File '{filename}' not found")
-    
-    file, stream_generator = await file_service.download_file(file_record.file_id, current_user)
-    
-    return StreamingResponse(
-        stream_generator,
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{file.name}"',
-            "Content-Length": str(file.size),
-        }
-    )
+
+    try:
+        file_record = file_repo.find_by_owner_and_name(current_user, filename)
+        if not file_record:
+            raise FileNotFoundError(f"File '{filename}' not found")
+
+        file, stream_generator = await file_service.download_file(file_record.file_id, current_user)
+
+        return StreamingResponse(
+            stream_generator,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file.name}"',
+                "Content-Length": str(file.size),
+            }
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except UnauthorizedAccessError:
+        raise HTTPException(status_code=403, detail="You do not have permission to download this file")
+    except ChunkserverUnavailableError:
+        raise HTTPException(status_code=503, detail="Storage service temporarily unavailable")
+    except Exception as e:
+        logger.error(f"Unexpected error during download of '{filename}': {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while downloading the file")
 
 
 @router.delete("", response_model=DeleteFilesResponse)
