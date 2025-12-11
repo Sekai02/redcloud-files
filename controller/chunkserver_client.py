@@ -200,18 +200,22 @@ class ChunkserverClient:
     async def read_chunk(self, chunk_id: str) -> AsyncIterator[bytes]:
         """
         Retrieve chunk data from chunkserver.
-        
+
+        Note: Streaming operations cannot use retry logic.
+        The stream must succeed or fail in one attempt.
+
         Args:
             chunk_id: UUID of the chunk to retrieve
-            
+
         Yields:
             Chunk data in streaming pieces
-            
+
         Raises:
             ChunkserverUnavailableError: If chunkserver is unreachable
             FileNotFoundError: If chunk does not exist
         """
-        return await self._retry_with_backoff(self._read_chunk_internal, chunk_id)
+        async for piece in self._read_chunk_internal(chunk_id):
+            yield piece
     
     async def _read_chunk_internal(self, chunk_id: str) -> AsyncIterator[bytes]:
         """Internal implementation of read_chunk without retry logic."""
@@ -234,13 +238,14 @@ class ChunkserverClient:
             first_response = True
             async for response_bytes in response_stream:
                 response = ReadChunkResponse.from_json(response_bytes)
-                
+
                 if first_response:
+                    first_response = False
                     if response.metadata:
                         logger.info(f"Reading chunk {chunk_id}, size={response.metadata.total_size}")
-                        first_response = False
-                    continue
-                
+                    if not response.data:
+                        continue
+
                 if response.data:
                     yield response.data.data
             

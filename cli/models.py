@@ -65,6 +65,15 @@ class LoginCommand:
     command: Literal["login"] = "login"
 
 
+@dataclass(frozen=True)
+class DownloadCommand:
+    """Download file by filename."""
+
+    filename: str
+    output_path: str | None = None
+    command: Literal["download"] = "download"
+
+
 CommandRequest = (
     AddCommand
     | DeleteCommand
@@ -73,4 +82,5 @@ CommandRequest = (
     | DeleteTagsCommand
     | RegisterCommand
     | LoginCommand
+    | DownloadCommand
 )

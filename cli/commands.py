@@ -11,6 +11,7 @@ from cli.models import (
     ListCommand,
     RegisterCommand,
     LoginCommand,
+    DownloadCommand,
 )
 from cli.config import Config
 from cli.controller_client import ControllerClient
@@ -143,3 +144,19 @@ def handle_delete_tags(cmd: DeleteTagsCommand, client: Optional[ControllerClient
     if client is None:
         client = get_client()
     return client.delete_tags(list(cmd.tag_query), list(cmd.tag_list))
+
+
+def handle_download(cmd: DownloadCommand, client: Optional[ControllerClient] = None) -> str:
+    """
+    Handle 'download' command.
+
+    Args:
+        cmd: DownloadCommand with filename and optional output_path
+        client: Optional ControllerClient for dependency injection (testing)
+
+    Returns:
+        Success or error message with download results
+    """
+    if client is None:
+        client = get_client()
+    return client.download(cmd.filename, cmd.output_path)

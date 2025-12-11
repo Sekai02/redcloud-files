@@ -478,6 +478,82 @@ class ControllerClient:
         except Exception as e:
             return f"Unexpected error removing tags: {e}"
 
+    def download(self, filename: str, output_path: str | None = None) -> str:
+        """
+        Download a file by filename with progress feedback.
+
+        Args:
+            filename: Name of file to download
+            output_path: Optional output path (defaults to current directory)
+
+        Returns:
+            Success message with download details
+        """
+        import sys
+        from pathlib import Path
+        
+        try:
+            headers = self._get_auth_header()
+        except ValueError as e:
+            return f"Error: {e}"
+
+        try:
+            url = f'/files/by-name/{filename}/download'
+            
+            with self.session.stream('GET', url, headers=headers) as response:
+                if response.status_code == 200:
+                    if output_path:
+                        output_file = Path(output_path)
+                        if output_file.is_dir():
+                            output_file = output_file / filename
+                    else:
+                        output_file = Path(filename)
+                    
+                    total_size = int(response.headers.get('Content-Length', 0))
+                    downloaded = 0
+                    
+                    with open(output_file, 'wb') as f:
+                        for chunk in response.iter_bytes(chunk_size=8192):
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            
+                            if total_size > 0:
+                                progress = (downloaded / total_size) * 100
+                                downloaded_mb = downloaded / (1024 * 1024)
+                                total_mb = total_size / (1024 * 1024)
+                                sys.stdout.write(
+                                    f"\rDownloading {filename}: {downloaded_mb:.2f} MB / {total_mb:.2f} MB ({progress:.1f}%)"
+                                )
+                                sys.stdout.flush()
+                            else:
+                                downloaded_mb = downloaded / (1024 * 1024)
+                                sys.stdout.write(
+                                    f"\rDownloading {filename}: {downloaded_mb:.2f} MB"
+                                )
+                                sys.stdout.flush()
+                    
+                    sys.stdout.write('\n')
+                    sys.stdout.flush()
+                    
+                    if total_size > 0:
+                        size_mb = total_size / (1024 * 1024)
+                        return f"Downloaded: {filename} ({size_mb:.2f} MB)\nSaved to: {output_file.absolute()}"
+                    else:
+                        downloaded_mb = downloaded / (1024 * 1024)
+                        return f"Downloaded: {filename} ({downloaded_mb:.2f} MB)\nSaved to: {output_file.absolute()}"
+                else:
+                    response.read()
+                    return f"Error: {self._format_error(response)}"
+
+        except httpx.ConnectError:
+            return "Error: Cannot connect to controller server. Is it running?"
+        except httpx.TimeoutException:
+            return "Error: Request timed out. Server may be overloaded."
+        except IOError as e:
+            return f"Error writing file: {e}"
+        except Exception as e:
+            return f"Unexpected error downloading file: {e}"
+
     def close(self) -> None:
         """Close the HTTP session."""
         self.session.close()
