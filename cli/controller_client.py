@@ -9,8 +9,7 @@ import httpx
 
 from common.logging_config import get_logger
 from cli.config import Config
-from cli.constants import GREEN, RESET
-from cli.utils import format_file_size
+from cli.utils import format_file_size, ProgressFileWrapper
 
 logger = get_logger(__name__)
 
@@ -384,53 +383,34 @@ class ControllerClient:
             upload_timeout = self._calculate_upload_timeout(file_size)
 
             try:
-                def file_stream_with_progress():
-                    uploaded = 0
-                    with open(normalized_path, 'rb') as f:
-                        while True:
-                            chunk = f.read(8192)
-                            if not chunk:
-                                break
-                            uploaded += len(chunk)
-                            
-                            progress = (uploaded / file_size) * 100
-                            sys.stdout.write(
-                                f"\rUploading {filename}: {format_file_size(uploaded)} / {format_file_size(file_size)} ({GREEN}{progress:.1f}%{RESET})"
-                            )
-                            sys.stdout.flush()
-                            
-                            yield chunk
-                    
-                    sys.stdout.write('\n')
-                    sys.stdout.flush()
+                with ProgressFileWrapper(normalized_path, file_size, filename) as progress_file:
+                    upload_headers = headers.copy()
+                    upload_headers['Content-Length'] = str(file_size)
 
-                upload_headers = headers.copy()
-                upload_headers['Content-Length'] = str(file_size)
+                    files = {'file': (filename, progress_file)}
+                    data = {'tags': ','.join(tags)}
 
-                files = {'file': (filename, file_stream_with_progress())}
-                data = {'tags': ','.join(tags)}
+                    with httpx.Client(
+                        base_url=self.config.get_base_url(),
+                        timeout=upload_timeout
+                    ) as upload_client:
+                        response = upload_client.post(
+                            '/files',
+                            files=files,
+                            data=data,
+                            headers=upload_headers
+                        )
 
-                with httpx.Client(
-                    base_url=self.config.get_base_url(),
-                    timeout=upload_timeout
-                ) as upload_client:
-                    response = upload_client.post(
-                        '/files',
-                        files=files,
-                        data=data,
-                        headers=upload_headers
-                    )
-
-                if response.status_code == 201:
-                    result = response.json()
-                    results.append(
-                        f"Added: {result['name']} "
-                        f"(ID: {result['file_id'][:8]}..., "
-                        f"Size: {format_file_size(result['size'])}, "
-                        f"Tags: {', '.join(result['tags'])})"
-                    )
-                else:
-                    results.append(f"Error uploading {file_path}: {self._format_error(response)}")
+                    if response.status_code == 201:
+                        result = response.json()
+                        results.append(
+                            f"Added: {result['name']} "
+                            f"(ID: {result['file_id'][:8]}..., "
+                            f"Size: {format_file_size(result['size'])}, "
+                            f"Tags: {', '.join(result['tags'])})"
+                        )
+                    else:
+                        results.append(f"Error uploading {file_path}: {self._format_error(response)}")
 
             except httpx.ConnectError:
                 sys.stdout.write('\r' + ' ' * 100 + '\r')
