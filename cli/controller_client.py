@@ -385,7 +385,6 @@ class ControllerClient:
             try:
                 with ProgressFileWrapper(normalized_path, file_size, filename) as progress_file:
                     upload_headers = headers.copy()
-                    upload_headers['Content-Length'] = str(file_size)
 
                     files = {'file': (filename, progress_file)}
                     data = {'tags': ','.join(tags)}
