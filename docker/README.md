@@ -88,12 +88,12 @@ cd /path/to/your/files
 ./docker/scripts/run-cli.sh
 ```
 
-Inside the CLI, reference files relative to your current directory:
+Inside the CLI, reference files with the mandatory uploads/ prefix:
 
 ```
-add requirements.txt [dependencies]
-add README.md [docs]
-add src/main.py [code, python]
+add uploads/requirements.txt [dependencies]
+add uploads/README.md [docs]
+add uploads/src/main.py [code, python]
 ```
 
 ### Download Files
@@ -102,9 +102,10 @@ Downloads are automatically saved to the `downloads/` directory:
 
 ```
 download requirements.txt
+download config.json downloads/backup/config.json
 ```
 
-The file will be saved to `./downloads/requirements.txt` on your host machine.
+The first command saves to `./downloads/requirements.txt`. The second command saves to `./downloads/backup/config.json` on your host machine. When specifying an output path, the downloads/ prefix is mandatory.
 
 ### Cross-Platform Examples
 
