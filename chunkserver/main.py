@@ -3,20 +3,16 @@ Loads chunk index, starts RPC server to handle controller requests.
 """
 
 import asyncio
-import logging
 import signal
 import sys
 from pathlib import Path
 
+from common.logging_config import setup_logging
 from common.constants import CHUNKSERVER_PORT
 from chunkserver.chunk_index import ChunkIndex
 from chunkserver.grpc_server import create_server
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = setup_logging('chunkserver')
 
 
 async def serve(chunk_index: ChunkIndex) -> None:

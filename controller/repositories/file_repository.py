@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
+from common.logging_config import get_logger
 from controller.database import get_db_connection
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -116,6 +119,7 @@ class FileRepository:
 
     @staticmethod
     def delete_file(file_id: str, conn=None) -> None:
+        logger.debug(f"Deleting file [file_id={file_id}]")
         should_close = conn is None
         if conn is None:
             conn = get_db_connection().__enter__()
@@ -125,6 +129,10 @@ class FileRepository:
             cursor.execute("DELETE FROM files WHERE file_id = ?", (file_id,))
             if should_close:
                 conn.commit()
+            logger.info(f"File deleted successfully [file_id={file_id}]")
+        except Exception as e:
+            logger.error(f"Failed to delete file [file_id={file_id}]: {e}", exc_info=True)
+            raise
         finally:
             if should_close:
                 conn.close()

@@ -2,7 +2,10 @@
 
 from typing import List
 
+from common.logging_config import get_logger
 from controller.database import get_db_connection
+
+logger = get_logger(__name__)
 
 
 class TagRepository:

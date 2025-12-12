@@ -2,9 +2,12 @@
 
 import uvicorn
 import asyncio
+import time
+import uuid
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
+from common.logging_config import setup_logging, get_logger
 from controller.config import CONTROLLER_HOST, CONTROLLER_PORT
 from controller.database import init_database
 from controller.routes.auth_routes import router as auth_router
@@ -23,6 +26,7 @@ from controller.exceptions import (
     ChecksumMismatchError
 )
 
+logger = setup_logging('controller')
 
 app = FastAPI(
     title="RedCloud Files Controller",
@@ -33,13 +37,46 @@ app = FastAPI(
 cleanup_task = OrphanedChunkCleaner()
 
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """
+    Middleware to log all HTTP requests and responses.
+    """
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    
+    start_time = time.time()
+    
+    user_id = getattr(request.state, 'user_id', None)
+    
+    logger.info(
+        f"Request started: {request.method} {request.url.path} [request_id={request_id}] [user_id={user_id or 'anonymous'}]"
+    )
+    
+    response = await call_next(request)
+    
+    duration = time.time() - start_time
+    
+    logger.info(
+        f"Request completed: {request.method} {request.url.path} "
+        f"status={response.status_code} duration={duration:.3f}s [request_id={request_id}]"
+    )
+    
+    response.headers["X-Request-ID"] = request_id
+    
+    return response
+
+
 @app.on_event("startup")
 async def startup_event():
     """
     Initialize database and start background tasks on application startup.
     """
+    logger.info("Controller service starting up...")
     init_database()
+    logger.info("Database initialized")
     await cleanup_task.start()
+    logger.info("Background cleanup task started")
 
 
 @app.on_event("shutdown")
@@ -47,11 +84,17 @@ async def shutdown_event():
     """
     Cleanup resources on application shutdown.
     """
+    logger.info("Controller service shutting down...")
     await cleanup_task.stop()
+    logger.info("Cleanup task stopped")
 
 
 @app.exception_handler(UserAlreadyExistsError)
 async def user_already_exists_handler(request: Request, exc: UserAlreadyExistsError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"User already exists error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"detail": str(exc), "code": "USER_ALREADY_EXISTS"}
@@ -60,6 +103,10 @@ async def user_already_exists_handler(request: Request, exc: UserAlreadyExistsEr
 
 @app.exception_handler(InvalidCredentialsError)
 async def invalid_credentials_handler(request: Request, exc: InvalidCredentialsError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"Invalid credentials error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
     return JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED,
         content={"detail": str(exc), "code": "INVALID_CREDENTIALS"}
@@ -68,6 +115,10 @@ async def invalid_credentials_handler(request: Request, exc: InvalidCredentialsE
 
 @app.exception_handler(InvalidAPIKeyError)
 async def invalid_api_key_handler(request: Request, exc: InvalidAPIKeyError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"Invalid API key error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
     return JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED,
         content={"detail": str(exc), "code": "INVALID_API_KEY"}
@@ -76,6 +127,10 @@ async def invalid_api_key_handler(request: Request, exc: InvalidAPIKeyError):
 
 @app.exception_handler(FileNotFoundError)
 async def file_not_found_handler(request: Request, exc: FileNotFoundError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"File not found error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
         content={"detail": str(exc), "code": "FILE_NOT_FOUND"}
@@ -84,6 +139,11 @@ async def file_not_found_handler(request: Request, exc: FileNotFoundError):
 
 @app.exception_handler(UnauthorizedAccessError)
 async def unauthorized_access_handler(request: Request, exc: UnauthorizedAccessError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    user_id = getattr(request.state, 'user_id', 'unknown')
+    logger.warning(
+        f"Unauthorized access error: {exc} [request_id={request_id}] [user_id={user_id}] path={request.url.path}"
+    )
     return JSONResponse(
         status_code=status.HTTP_403_FORBIDDEN,
         content={"detail": str(exc), "code": "UNAUTHORIZED_ACCESS"}
@@ -92,6 +152,11 @@ async def unauthorized_access_handler(request: Request, exc: UnauthorizedAccessE
 
 @app.exception_handler(ChunkserverUnavailableError)
 async def chunkserver_unavailable_handler(request: Request, exc: ChunkserverUnavailableError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"Chunkserver unavailable error: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": str(exc), "code": "CHUNKSERVER_UNAVAILABLE"}
@@ -100,6 +165,10 @@ async def chunkserver_unavailable_handler(request: Request, exc: ChunkserverUnav
 
 @app.exception_handler(InvalidTagQueryError)
 async def invalid_tag_query_handler(request: Request, exc: InvalidTagQueryError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"Invalid tag query error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"detail": str(exc), "code": "INVALID_TAG_QUERY"}
@@ -108,6 +177,11 @@ async def invalid_tag_query_handler(request: Request, exc: InvalidTagQueryError)
 
 @app.exception_handler(StorageFullError)
 async def storage_full_handler(request: Request, exc: StorageFullError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"Storage full error: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
     return JSONResponse(
         status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
         content={"detail": str(exc), "code": "STORAGE_FULL"}
@@ -116,6 +190,11 @@ async def storage_full_handler(request: Request, exc: StorageFullError):
 
 @app.exception_handler(ChecksumMismatchError)
 async def checksum_mismatch_handler(request: Request, exc: ChecksumMismatchError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"Checksum mismatch error: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": str(exc), "code": "CHECKSUM_MISMATCH"}
@@ -124,6 +203,11 @@ async def checksum_mismatch_handler(request: Request, exc: ChecksumMismatchError
 
 @app.exception_handler(DFSException)
 async def dfs_exception_handler(request: Request, exc: DFSException):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"DFS exception: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": str(exc), "code": "INTERNAL_ERROR"}
@@ -132,6 +216,11 @@ async def dfs_exception_handler(request: Request, exc: DFSException):
 
 @app.exception_handler(NotImplementedError)
 async def not_implemented_handler(request: Request, exc: NotImplementedError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"Not implemented error: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
     return JSONResponse(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         content={"detail": str(exc), "code": "NOT_IMPLEMENTED"}

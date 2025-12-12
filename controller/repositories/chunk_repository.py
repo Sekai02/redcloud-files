@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 from typing import List
 
+from common.logging_config import get_logger
 from controller.database import get_db_connection
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -21,6 +24,7 @@ class ChunkRepository:
         if not chunks:
             return
         
+        logger.debug(f"Creating {len(chunks)} chunks for file_id={chunks[0].file_id if chunks else 'unknown'}")
         should_close = conn is None
         if conn is None:
             conn = get_db_connection().__enter__()
@@ -37,6 +41,10 @@ class ChunkRepository:
                 )
             if should_close:
                 conn.commit()
+            logger.info(f"Created {len(chunks)} chunks successfully")
+        except Exception as e:
+            logger.error(f"Failed to create chunks: {e}", exc_info=True)
+            raise
         finally:
             if should_close:
                 conn.close()
@@ -69,6 +77,7 @@ class ChunkRepository:
 
     @staticmethod
     def delete_chunks(file_id: str, conn=None) -> List[str]:
+        logger.debug(f"Deleting chunks [file_id={file_id}]")
         should_close = conn is None
         if conn is None:
             conn = get_db_connection().__enter__()
@@ -85,7 +94,11 @@ class ChunkRepository:
             if should_close:
                 conn.commit()
             
+            logger.info(f"Deleted {len(chunk_ids)} chunks [file_id={file_id}]")
             return chunk_ids
+        except Exception as e:
+            logger.error(f"Failed to delete chunks [file_id={file_id}]: {e}", exc_info=True)
+            raise
         finally:
             if should_close:
                 conn.close()

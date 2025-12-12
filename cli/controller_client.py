@@ -2,13 +2,17 @@
 
 import os
 import time
+import uuid
 from typing import Optional
 from pathlib import Path
 import httpx
 
+from common.logging_config import get_logger
 from cli.config import Config
 from cli.constants import GREEN, RESET
 from cli.utils import format_file_size
+
+logger = get_logger(__name__)
 
 
 class ControllerClient:
@@ -26,6 +30,8 @@ class ControllerClient:
             base_url=config.get_base_url(),
             timeout=config.get_timeout()
         )
+        self.request_id = None
+        logger.info(f"Initialized ControllerClient [base_url={config.get_base_url()}]")
 
     def _calculate_upload_timeout(self, file_size: int) -> float:
         """
@@ -135,16 +141,38 @@ class ControllerClient:
         backoff = retry_config['retry_backoff_multiplier']
 
         last_exception = None
+        
+        self.request_id = str(uuid.uuid4())
+        if 'headers' not in kwargs:
+            kwargs['headers'] = {}
+        kwargs['headers']['X-Request-ID'] = self.request_id
+        
+        logger.debug(
+            f"Making request: {method} {endpoint} [request_id={self.request_id}]"
+        )
 
         for attempt in range(max_retries + 1):
             try:
                 response = self.session.request(method, endpoint, **kwargs)
+                
+                logger.debug(
+                    f"Response received: {method} {endpoint} status={response.status_code} [request_id={self.request_id}]"
+                )
 
                 if 400 <= response.status_code < 500:
+                    if response.status_code >= 400:
+                        logger.warning(
+                            f"Client error: {method} {endpoint} status={response.status_code} [request_id={self.request_id}]"
+                        )
                     return response
 
                 if response.status_code >= 500 and attempt < max_retries:
-                    time.sleep(backoff ** attempt)
+                    delay = backoff ** attempt
+                    logger.warning(
+                        f"Server error (attempt {attempt + 1}/{max_retries + 1}): "
+                        f"{method} {endpoint} status={response.status_code}, retrying in {delay}s [request_id={self.request_id}]"
+                    )
+                    time.sleep(delay)
                     continue
 
                 return response
@@ -152,8 +180,17 @@ class ControllerClient:
             except (httpx.ConnectError, httpx.TimeoutException) as e:
                 last_exception = e
                 if attempt < max_retries:
-                    time.sleep(backoff ** attempt)
+                    delay = backoff ** attempt
+                    logger.warning(
+                        f"Network error (attempt {attempt + 1}/{max_retries + 1}): "
+                        f"{method} {endpoint} error={type(e).__name__}, retrying in {delay}s [request_id={self.request_id}]"
+                    )
+                    time.sleep(delay)
                     continue
+                else:
+                    logger.error(
+                        f"Network error (max retries exceeded): {method} {endpoint} error={e} [request_id={self.request_id}]"
+                    )
         if last_exception:
             if isinstance(last_exception, httpx.ConnectError):
                 raise ConnectionError("Cannot connect to controller server. Is it running?")
@@ -237,6 +274,7 @@ class ControllerClient:
         Returns:
             Success message with registration details
         """
+        logger.info(f"Attempting to register user: {username}")
         try:
             response = self._request_with_retry(
                 'POST',
@@ -250,14 +288,18 @@ class ControllerClient:
                 user_id = data['user_id']
 
                 self.config.set_api_key(api_key)
+                logger.info(f"Registration successful for user: {username} [user_id={user_id}]")
 
                 return f"Registration successful!\nUser ID: {user_id}\nAPI key saved to config."
             else:
+                logger.warning(f"Registration failed for user: {username} status={response.status_code}")
                 return f"Registration failed: {self._format_error(response)}"
 
         except ConnectionError as e:
+            logger.error(f"Connection error during registration: {e}")
             return f"Error: {e}"
         except Exception as e:
+            logger.error(f"Unexpected error during registration: {e}", exc_info=True)
             return f"Unexpected error during registration: {e}"
 
     def login(self, username: str, password: str) -> str:
@@ -271,6 +313,7 @@ class ControllerClient:
         Returns:
             Success message with login details
         """
+        logger.info(f"Attempting to login user: {username}")
         try:
             response = self._request_with_retry(
                 'POST',
@@ -283,14 +326,18 @@ class ControllerClient:
                 api_key = data['api_key']
 
                 self.config.set_api_key(api_key)
+                logger.info(f"Login successful for user: {username}")
 
                 return f"Login successful!\nAPI key updated in config."
             else:
+                logger.warning(f"Login failed for user: {username} status={response.status_code}")
                 return f"Login failed: {self._format_error(response)}"
 
         except ConnectionError as e:
+            logger.error(f"Connection error during login: {e}")
             return f"Error: {e}"
         except Exception as e:
+            logger.error(f"Unexpected error during login: {e}", exc_info=True)
             return f"Unexpected error during login: {e}"
 
     def add_files(self, file_paths: list[str], tags: list[str]) -> str:
@@ -347,14 +394,14 @@ class ControllerClient:
                             uploaded += len(chunk)
                             
                             progress = (uploaded / file_size) * 100
-                        sys.stdout.write(
-                            f"\rUploading {filename}: {format_file_size(uploaded)} / {format_file_size(file_size)} ({GREEN}{progress:.1f}%{RESET})"
-                        )
-                        sys.stdout.flush()
-                        
-                        yield chunk
-                
-                sys.stdout.write('\n')
+                            sys.stdout.write(
+                                f"\rUploading {filename}: {format_file_size(uploaded)} / {format_file_size(file_size)} ({GREEN}{progress:.1f}%{RESET})"
+                            )
+                            sys.stdout.flush()
+                            
+                            yield chunk
+                    
+                    sys.stdout.write('\n')
                     sys.stdout.flush()
 
                 upload_headers = headers.copy()
@@ -646,13 +693,19 @@ class ControllerClient:
                             
                             if total_size > 0:
                                 progress = (downloaded / total_size) * 100
-                            sys.stdout.write(
-                                f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({GREEN}{progress:.1f}%{RESET})"
-                            )
-                            sys.stdout.flush()
-                        else:
-                            sys.stdout.write(
-                                f"\rDownloading {filename}: {format_file_size(downloaded)}"
+                                sys.stdout.write(
+                                    f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({GREEN}{progress:.1f}%{RESET})"
+                                )
+                                sys.stdout.flush()
+                            else:
+                                sys.stdout.write(
+                                    f"\rDownloading {filename}: {format_file_size(downloaded)}"
+                                )
+                                sys.stdout.flush()
+                    
+                    sys.stdout.write('\n')
+                    sys.stdout.flush()
+                    
                     if total_size > 0:
                         return f"Downloaded: {filename} ({format_file_size(total_size)})\nSaved to: {output_file.absolute()}"
                     else:
@@ -668,7 +721,6 @@ class ControllerClient:
         except IOError as e:
             return f"Error writing file: {e}"
         except Exception as e:
-            return f"Unexpected error downloading file: {e}"
             return f"Unexpected error downloading file: {e}"
 
     def close(self) -> None:

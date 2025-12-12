@@ -17,5 +17,6 @@ VOLUME /downloads
 WORKDIR /uploads
 
 ENV DFS_CONTROLLER_URL=http://controller:8000
+ENV LOG_LEVEL=INFO
 
 CMD ["python", "-m", "cli.main"]

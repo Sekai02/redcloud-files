@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
+from common.logging_config import get_logger
 from cli.models import (
     AddCommand,
     AddTagsCommand,
@@ -15,6 +16,8 @@ from cli.models import (
 )
 from cli.config import Config
 from cli.controller_client import ControllerClient
+
+logger = get_logger(__name__)
 
 
 _client: Optional[ControllerClient] = None
@@ -29,6 +32,7 @@ def get_client() -> ControllerClient:
     """
     global _client
     if _client is None:
+        logger.debug("Creating new ControllerClient instance")
         config = Config(Path.home() / '.redcloud' / 'config.json')
         _client = ControllerClient(config)
     return _client
@@ -77,9 +81,12 @@ def handle_add(cmd: AddCommand, client: Optional[ControllerClient] = None) -> st
     Returns:
         Success or error message with upload results
     """
+    logger.info(f"Executing add command: {len(cmd.file_list)} files, tags={list(cmd.tag_list)}")
     if client is None:
         client = get_client()
-    return client.add_files(list(cmd.file_list), list(cmd.tag_list))
+    result = client.add_files(list(cmd.file_list), list(cmd.tag_list))
+    logger.debug(f"Add command completed")
+    return result
 
 
 def handle_delete(cmd: DeleteCommand, client: Optional[ControllerClient] = None) -> str:
@@ -109,9 +116,12 @@ def handle_list(cmd: ListCommand, client: Optional[ControllerClient] = None) -> 
     Returns:
         Formatted list of files
     """
+    logger.info(f"Executing list command: tags={list(cmd.tag_query)}")
     if client is None:
         client = get_client()
-    return client.list_files(list(cmd.tag_query))
+    result = client.list_files(list(cmd.tag_query))
+    logger.debug(f"List command completed")
+    return result
 
 
 def handle_add_tags(cmd: AddTagsCommand, client: Optional[ControllerClient] = None) -> str:
@@ -157,6 +167,9 @@ def handle_download(cmd: DownloadCommand, client: Optional[ControllerClient] = N
     Returns:
         Success or error message with download results
     """
+    logger.info(f"Executing download command: filename={cmd.filename} output_path={cmd.output_path}")
     if client is None:
         client = get_client()
-    return client.download(cmd.filename, cmd.output_path)
+    result = client.download(cmd.filename, cmd.output_path)
+    logger.debug(f"Download command completed")
+    return result
