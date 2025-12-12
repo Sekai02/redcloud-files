@@ -6,6 +6,10 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from common.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class Config:
     """Manages CLI configuration stored in JSON file."""
@@ -35,11 +39,13 @@ class Config:
         Returns:
             Configuration dictionary
         """
+        logger.debug(f"Loading configuration from {self.config_path}")
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
         except PermissionError:
             import tempfile
             self.config_path = Path(tempfile.gettempdir()) / '.redcloud' / 'config.json'
+            logger.warning(f"Permission denied, using temp config path: {self.config_path}")
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
 
         if self.config_path.exists():
@@ -48,11 +54,14 @@ class Config:
                     data = json.load(f)
                 config = self.DEFAULT_CONFIG.copy()
                 config.update(data)
+                logger.info(f"Configuration loaded successfully from {self.config_path}")
                 return config
             except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"Failed to load configuration: {e}", exc_info=True)
                 backup_path = self.config_path.with_suffix('.json.bak')
                 try:
                     shutil.copy(self.config_path, backup_path)
+                    logger.info(f"Corrupted config backed up to {backup_path}")
                 except:
                     pass
                 return self.DEFAULT_CONFIG.copy()
@@ -61,7 +70,9 @@ class Config:
             try:
                 with open(self.config_path, 'w') as f:
                     json.dump(config, f, indent=2)
+                logger.info(f"Created new configuration file at {self.config_path}")
             except IOError:
+                logger.warning(f"Could not create configuration file at {self.config_path}")
                 pass
             return config
 
@@ -89,8 +100,10 @@ class Config:
         Args:
             key: API key string (format: "dfs_<uuid>")
         """
+        logger.debug("Saving API key to configuration")
         self.data['api_key'] = key
         self.save()
+        logger.info("API key saved successfully")
 
     def get_base_url(self) -> str:
         """
