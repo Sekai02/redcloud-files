@@ -112,7 +112,9 @@ Navigate to the directory containing files you want to upload:
 
 ```bash
 cd /path/to/your/files
+chmod 777 .
 mkdir -p downloads
+chmod 777 downloads
 
 docker run -it --rm \
     --network dfs-network \
@@ -156,8 +158,8 @@ docker run -it --rm ^
 
 ### Volume Mounts Explained
 
-- **`/uploads`**: Your current directory is mounted here. Reference files relative to this location when uploading.
-- **`/downloads`**: Downloaded files are saved here automatically (maps to `./downloads` on your host).
+- **`/uploads`**: Your current directory is mounted here. Upload paths can use `uploads/` prefix, be relative (auto-resolved to `/uploads`), or be absolute paths within this directory.
+- **`/downloads`**: Downloaded files are saved here automatically (maps to `./downloads` on your host). Download paths can use `downloads/` prefix, be relative (auto-resolved to `/downloads`), or be absolute paths.
 - **`-w /uploads`**: Sets the working directory inside the container.
 
 ### Usage Examples
@@ -167,27 +169,29 @@ Once the CLI is running:
 **Upload files:**
 ```
 add requirements.txt [dependencies, code]
-add README.md .gitignore [docs]
+add uploads/README.md uploads/.gitignore [docs]
 add chunkserver/main.py [python, server]
 ```
 
 **Download files:**
 ```
 download requirements.txt
+download requirements.txt subfolder/
+download requirements.txt downloads/subfolder/renamed.txt
 ```
 Files are automatically saved to the `downloads/` directory on your host.
 
-**Download to custom location:**
-```
-download requirements.txt /uploads/custom-location.txt
-```
-
 ### Important Notes
 
-- **File paths are relative to `/uploads`** (your mounted directory)
+- **Upload paths** can use `uploads/` prefix, be relative (resolved to `/uploads`), or be absolute paths within `/uploads`
+- **Download paths** can use `downloads/` prefix, be relative (resolved to `/downloads`), or be absolute paths within `/downloads` or `/uploads`
+- **File paths are relative** to their respective directories (`/uploads` for uploads, `/downloads` for downloads)
 - Navigate to your files directory **before** starting the CLI container
-- Downloads default to `/downloads` unless you specify a different output path
-- The container working directory is `/uploads`, so relative paths work naturally
+- Downloads default to `/downloads/{filename}` when no output path is specified
+- The container working directory is `/uploads`, so relative upload paths work naturally
+- **Path validation** prevents directory traversal attacks (e.g., `../../../etc/passwd`) and restricts file access to `/uploads` and `/downloads` directories only
+- **Wrong prefix errors**: Using `downloads/` in upload commands or `uploads/` in download commands will return a helpful error message
+- **Security boundary**: Absolute paths outside `/uploads` and `/downloads` directories are blocked for security reasons
 
 ---
 
