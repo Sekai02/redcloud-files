@@ -228,21 +228,23 @@ class ControllerClient:
             return f"Error: {e}"
 
         for file_path in file_paths:
-            if not os.path.exists(file_path):
+            normalized_path = os.path.abspath(os.path.expanduser(file_path))
+            
+            if not os.path.exists(normalized_path):
                 results.append(f"Error: File not found: {file_path}")
                 continue
 
-            if not os.path.isfile(file_path):
+            if not os.path.isfile(normalized_path):
                 results.append(f"Error: Not a file: {file_path}")
                 continue
 
-            if os.path.getsize(file_path) == 0:
+            if os.path.getsize(normalized_path) == 0:
                 results.append(f"Error: File is empty: {file_path}")
                 continue
 
             try:
-                with open(file_path, 'rb') as f:
-                    files = {'file': (os.path.basename(file_path), f)}
+                with open(normalized_path, 'rb') as f:
+                    files = {'file': (os.path.basename(normalized_path), f)}
                     data = {'tags': ','.join(tags)}
 
                     response = self._request_with_retry(
@@ -484,7 +486,7 @@ class ControllerClient:
 
         Args:
             filename: Name of file to download
-            output_path: Optional output path (defaults to current directory)
+            output_path: Optional output path (defaults to /downloads directory)
 
         Returns:
             Success message with download details
@@ -507,7 +509,11 @@ class ControllerClient:
                         if output_file.is_dir():
                             output_file = output_file / filename
                     else:
-                        output_file = Path(filename)
+                        downloads_dir = Path('/downloads')
+                        if downloads_dir.exists() and downloads_dir.is_dir():
+                            output_file = downloads_dir / filename
+                        else:
+                            output_file = Path(filename)
                     
                     total_size = int(response.headers.get('Content-Length', 0))
                     downloaded = 0
