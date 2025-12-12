@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from cli.config import Config
+from cli.constants import GREEN, RESET
 from cli.utils import format_file_size
 
 
@@ -347,12 +348,13 @@ class ControllerClient:
                             
                             progress = (uploaded / file_size) * 100
                         sys.stdout.write(
-                            f"\rUploading {filename}: {format_file_size(uploaded)} / {format_file_size(file_size)} ({progress:.1f}%)"
-                            sys.stdout.flush()
-                            
-                            yield chunk
-                    
-                    sys.stdout.write('\n')
+                            f"\rUploading {filename}: {format_file_size(uploaded)} / {format_file_size(file_size)} ({GREEN}{progress:.1f}%{RESET})"
+                        )
+                        sys.stdout.flush()
+                        
+                        yield chunk
+                
+                sys.stdout.write('\n')
                     sys.stdout.flush()
 
                 upload_headers = headers.copy()
@@ -645,16 +647,12 @@ class ControllerClient:
                             if total_size > 0:
                                 progress = (downloaded / total_size) * 100
                             sys.stdout.write(
-                                f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({progress:.1f}%)"
+                                f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({GREEN}{progress:.1f}%{RESET})"
                             )
                             sys.stdout.flush()
                         else:
                             sys.stdout.write(
                                 f"\rDownloading {filename}: {format_file_size(downloaded)}"
-                    
-                    sys.stdout.write('\n')
-                    sys.stdout.flush()
-                    
                     if total_size > 0:
                         return f"Downloaded: {filename} ({format_file_size(total_size)})\nSaved to: {output_file.absolute()}"
                     else:

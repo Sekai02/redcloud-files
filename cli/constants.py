@@ -12,6 +12,7 @@ STYLE = Style.from_dict(
 )
 
 RED_ORANGE = "\033[38;2;244;89;53m"
+GREEN = "\033[38;2;0;255;0m"
 RESET = "\033[0m"
 
 LOGO = f"""{RED_ORANGE}
