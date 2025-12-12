@@ -25,6 +25,21 @@ class ControllerClient:
             timeout=config.get_timeout()
         )
 
+    def _calculate_upload_timeout(self, file_size: int) -> float:
+        """
+        Calculate timeout for upload based on file size.
+
+        Args:
+            file_size: File size in bytes
+
+        Returns:
+            Timeout in seconds (30s base + 0.1s per MB)
+        """
+        base_timeout = 30.0
+        size_mb = file_size / (1024 * 1024)
+        size_factor = size_mb * 0.1
+        return base_timeout + size_factor
+
     def _normalize_upload_path(self, file_path: str) -> tuple[str, str | None]:
         """
         Normalize upload path by validating mandatory uploads/ prefix.
@@ -287,6 +302,8 @@ class ControllerClient:
         Returns:
             Formatted result message with upload status for each file
         """
+        import sys
+        
         results = []
 
         try:
@@ -309,37 +326,76 @@ class ControllerClient:
                 results.append(f"Error: Not a file: {file_path}")
                 continue
 
-            if os.path.getsize(normalized_path) == 0:
+            file_size = os.path.getsize(normalized_path)
+            if file_size == 0:
                 results.append(f"Error: File is empty: {file_path}")
                 continue
 
-            try:
-                with open(normalized_path, 'rb') as f:
-                    files = {'file': (os.path.basename(normalized_path), f)}
-                    data = {'tags': ','.join(tags)}
+            filename = os.path.basename(normalized_path)
+            upload_timeout = self._calculate_upload_timeout(file_size)
 
-                    response = self._request_with_retry(
-                        'POST',
+            try:
+                def file_stream_with_progress():
+                    uploaded = 0
+                    with open(normalized_path, 'rb') as f:
+                        while True:
+                            chunk = f.read(8192)
+                            if not chunk:
+                                break
+                            uploaded += len(chunk)
+                            
+                            progress = (uploaded / file_size) * 100
+                            uploaded_mb = uploaded / (1024 * 1024)
+                            total_mb = file_size / (1024 * 1024)
+                            sys.stdout.write(
+                                f"\rUploading {filename}: {uploaded_mb:.2f} MB / {total_mb:.2f} MB ({progress:.1f}%)"
+                            )
+                            sys.stdout.flush()
+                            
+                            yield chunk
+                    
+                    sys.stdout.write('\n')
+                    sys.stdout.flush()
+
+                upload_headers = headers.copy()
+                upload_headers['Content-Length'] = str(file_size)
+
+                files = {'file': (filename, file_stream_with_progress())}
+                data = {'tags': ','.join(tags)}
+
+                with httpx.Client(
+                    base_url=self.config.get_base_url(),
+                    timeout=upload_timeout
+                ) as upload_client:
+                    response = upload_client.post(
                         '/files',
                         files=files,
                         data=data,
-                        headers=headers
+                        headers=upload_headers
                     )
 
-                    if response.status_code == 201:
-                        result = response.json()
-                        results.append(
-                            f"Added: {result['name']} "
-                            f"(ID: {result['file_id'][:8]}..., "
-                            f"Size: {result['size']} bytes, "
-                            f"Tags: {', '.join(result['tags'])})"
-                        )
-                    else:
-                        results.append(f"Error uploading {file_path}: {self._format_error(response)}")
+                if response.status_code == 201:
+                    result = response.json()
+                    results.append(
+                        f"Added: {result['name']} "
+                        f"(ID: {result['file_id'][:8]}..., "
+                        f"Size: {result['size']} bytes, "
+                        f"Tags: {', '.join(result['tags'])})"
+                    )
+                else:
+                    results.append(f"Error uploading {file_path}: {self._format_error(response)}")
 
-            except ConnectionError as e:
-                results.append(f"Error uploading {file_path}: {e}")
+            except httpx.ConnectError:
+                sys.stdout.write('\r' + ' ' * 100 + '\r')
+                sys.stdout.flush()
+                results.append(f"Error uploading {file_path}: Cannot connect to controller server")
+            except httpx.TimeoutException:
+                sys.stdout.write('\r' + ' ' * 100 + '\r')
+                sys.stdout.flush()
+                results.append(f"Error uploading {file_path}: Upload timed out (file size: {file_size / (1024 * 1024):.2f} MB, timeout: {upload_timeout:.1f}s)")
             except Exception as e:
+                sys.stdout.write('\r' + ' ' * 100 + '\r')
+                sys.stdout.flush()
                 results.append(f"Error uploading {file_path}: {e}")
 
         return '\n'.join(results) if results else "No files uploaded."

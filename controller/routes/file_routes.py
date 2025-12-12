@@ -59,15 +59,11 @@ async def upload_file(
             detail="At least one tag is required for file upload"
         )
     
-    file_content = await file.read()
-    file_size = len(file_content)
-    
-    from io import BytesIO
-    file_data = BytesIO(file_content)
+    file_size = file.size if file.size else 0
     
     file_metadata = await file_service.upload_file(
         file_name=file.filename,
-        file_data=file_data,
+        file_data=file.file,
         file_size=file_size,
         tags=tag_list,
         owner_id=current_user,
