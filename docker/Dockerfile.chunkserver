@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY common/ ./common/
+COPY chunkserver/ ./chunkserver/
+
+RUN mkdir -p /app/data/chunks
+
+ENV CHUNK_STORAGE_PATH=/app/data/chunks
+ENV CHUNK_INDEX_PATH=/app/data/chunk_index.json
+
+CMD ["python", "-m", "chunkserver.main"]

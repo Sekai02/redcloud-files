@@ -1,6 +1,7 @@
 """Configuration management for RedCloud CLI."""
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -10,8 +11,8 @@ class Config:
     """Manages CLI configuration stored in JSON file."""
 
     DEFAULT_CONFIG = {
-        "controller_host": "localhost",
-        "controller_port": 8000,
+        "controller_host": os.environ.get("DFS_CONTROLLER_HOST", "controller"),
+        "controller_port": int(os.environ.get("DFS_CONTROLLER_PORT", "8000")),
         "timeout": 30,
         "max_retries": 3,
         "retry_backoff_multiplier": 2,

@@ -3,8 +3,9 @@
 import os
 from pathlib import Path
 from typing import Iterator, Optional
+from common.constants import DEFAULT_CHUNK_STORAGE_PATH
 
-CHUNKS_DIR = Path("./data/chunks")
+CHUNKS_DIR = Path(os.environ.get("CHUNK_STORAGE_PATH", DEFAULT_CHUNK_STORAGE_PATH))
 
 
 def ensure_chunks_directory() -> None:
