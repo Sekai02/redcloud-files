@@ -3,6 +3,7 @@
 import os
 import time
 from typing import Optional
+from pathlib import Path
 import httpx
 
 from cli.config import Config
@@ -23,6 +24,80 @@ class ControllerClient:
             base_url=config.get_base_url(),
             timeout=config.get_timeout()
         )
+
+    def _normalize_upload_path(self, file_path: str) -> tuple[str, str | None]:
+        """
+        Normalize upload path by handling uploads/ prefix and validating boundaries.
+
+        Args:
+            file_path: Input file path (can include uploads/ prefix or be relative)
+
+        Returns:
+            Tuple of (normalized_absolute_path, error_message)
+            error_message is None if validation succeeds
+        """
+        base_dir = Path('/uploads').resolve()
+        
+        path_str = file_path.strip()
+        if path_str.startswith('downloads/'):
+            return "", "Cannot use 'downloads/' prefix in upload command. Use 'uploads/' or relative paths."
+        
+        if path_str.startswith('uploads/'):
+            path_str = path_str[8:]
+        
+        normalized_path = Path(os.path.expanduser(path_str))
+        if not normalized_path.is_absolute():
+            normalized_path = base_dir / normalized_path
+        
+        try:
+            resolved_path = normalized_path.resolve()
+            if not str(resolved_path).startswith(str(base_dir)):
+                return "", f"Invalid path: '{file_path}' is outside uploads directory"
+        except (OSError, RuntimeError):
+            return "", f"Invalid path: '{file_path}'"
+        
+        return str(resolved_path), None
+
+    def _normalize_download_path(self, output_path: str, filename: str) -> tuple[Path, str | None]:
+        """
+        Normalize download path by handling downloads/ prefix and validating boundaries.
+
+        Args:
+            output_path: Output path (can include downloads/ prefix, be relative, or absolute)
+            filename: Original filename for default naming
+
+        Returns:
+            Tuple of (normalized_path_object, error_message)
+            error_message is None if validation succeeds
+        """
+        base_dir = Path('/downloads').resolve()
+        
+        if output_path:
+            path_str = output_path.strip()
+            if path_str.startswith('uploads/'):
+                return Path(), "Cannot use 'uploads/' prefix in download command. Use 'downloads/' or relative paths."
+            
+            if path_str.startswith('downloads/'):
+                path_str = path_str[10:]
+            
+            output_file = Path(path_str)
+            if not output_file.is_absolute():
+                output_file = base_dir / output_file
+            
+            try:
+                if output_file.exists() and output_file.is_dir():
+                    output_file = output_file / filename
+                
+                resolved_path = output_file.resolve()
+                if not str(resolved_path).startswith(str(base_dir)) and not str(resolved_path).startswith('/uploads'):
+                    return Path(), f"Invalid path: '{output_path}' is outside allowed directories"
+            except (OSError, RuntimeError):
+                return Path(), f"Invalid path: '{output_path}'"
+        else:
+            output_file = base_dir / filename
+        
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        return output_file, None
 
     def _request_with_retry(
         self,
@@ -214,7 +289,7 @@ class ControllerClient:
         Upload files with tags.
 
         Args:
-            file_paths: List of file paths to upload
+            file_paths: List of file paths to upload (can use uploads/ prefix, be relative, or absolute)
             tags: List of tags to associate with files
 
         Returns:
@@ -228,7 +303,11 @@ class ControllerClient:
             return f"Error: {e}"
 
         for file_path in file_paths:
-            normalized_path = os.path.abspath(os.path.expanduser(file_path))
+            normalized_path, error = self._normalize_upload_path(file_path)
+            
+            if error:
+                results.append(f"Error: {error}")
+                continue
             
             if not os.path.exists(normalized_path):
                 results.append(f"Error: File not found: {file_path}")
@@ -486,13 +565,12 @@ class ControllerClient:
 
         Args:
             filename: Name of file to download
-            output_path: Optional output path (defaults to /downloads directory)
+            output_path: Optional output path (can use downloads/ prefix, be relative to /downloads, or absolute)
 
         Returns:
             Success message with download details
         """
         import sys
-        from pathlib import Path
         
         try:
             headers = self._get_auth_header()
@@ -504,16 +582,11 @@ class ControllerClient:
             
             with self.session.stream('GET', url, headers=headers) as response:
                 if response.status_code == 200:
-                    if output_path:
-                        output_file = Path(output_path)
-                        if output_file.is_dir():
-                            output_file = output_file / filename
-                    else:
-                        downloads_dir = Path('/downloads')
-                        if downloads_dir.exists() and downloads_dir.is_dir():
-                            output_file = downloads_dir / filename
-                        else:
-                            output_file = Path(filename)
+                    output_file, error = self._normalize_download_path(output_path or "", filename)
+                    
+                    if error:
+                        response.read()
+                        return f"Error: {error}"
                     
                     total_size = int(response.headers.get('Content-Length', 0))
                     downloaded = 0
@@ -558,6 +631,7 @@ class ControllerClient:
         except IOError as e:
             return f"Error writing file: {e}"
         except Exception as e:
+            return f"Unexpected error downloading file: {e}"
             return f"Unexpected error downloading file: {e}"
 
     def close(self) -> None:

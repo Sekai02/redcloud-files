@@ -10,7 +10,9 @@ echo "  - Current directory -> /uploads (for file uploads)"
 echo "  - ./downloads -> /downloads (for file downloads)"
 echo ""
 
+chmod 777 .
 mkdir -p downloads
+chmod 777 downloads
 
 docker run -it --rm \
     --network dfs-network \

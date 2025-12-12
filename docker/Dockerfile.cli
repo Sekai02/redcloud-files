@@ -9,6 +9,7 @@ COPY common/ ./common/
 COPY cli/ ./cli/
 
 RUN mkdir -p /uploads /downloads
+RUN chmod 777 /uploads /downloads
 
 VOLUME /uploads
 VOLUME /downloads
