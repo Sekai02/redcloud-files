@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from cli.config import Config
+from cli.utils import format_file_size
 
 
 class ControllerClient:
@@ -345,11 +346,8 @@ class ControllerClient:
                             uploaded += len(chunk)
                             
                             progress = (uploaded / file_size) * 100
-                            uploaded_mb = uploaded / (1024 * 1024)
-                            total_mb = file_size / (1024 * 1024)
-                            sys.stdout.write(
-                                f"\rUploading {filename}: {uploaded_mb:.2f} MB / {total_mb:.2f} MB ({progress:.1f}%)"
-                            )
+                        sys.stdout.write(
+                            f"\rUploading {filename}: {format_file_size(uploaded)} / {format_file_size(file_size)} ({progress:.1f}%)"
                             sys.stdout.flush()
                             
                             yield chunk
@@ -379,7 +377,7 @@ class ControllerClient:
                     results.append(
                         f"Added: {result['name']} "
                         f"(ID: {result['file_id'][:8]}..., "
-                        f"Size: {result['size']} bytes, "
+                        f"Size: {format_file_size(result['size'])}, "
                         f"Tags: {', '.join(result['tags'])})"
                     )
                 else:
@@ -392,7 +390,7 @@ class ControllerClient:
             except httpx.TimeoutException:
                 sys.stdout.write('\r' + ' ' * 100 + '\r')
                 sys.stdout.flush()
-                results.append(f"Error uploading {file_path}: Upload timed out (file size: {file_size / (1024 * 1024):.2f} MB, timeout: {upload_timeout:.1f}s)")
+                results.append(f"Error uploading {file_path}: Upload timed out (file size: {format_file_size(file_size)}, timeout: {upload_timeout:.1f}s)")
             except Exception as e:
                 sys.stdout.write('\r' + ' ' * 100 + '\r')
                 sys.stdout.flush()
@@ -441,7 +439,7 @@ class ControllerClient:
                 for file_meta in files:
                     output.append(
                         f"  - {file_meta['name']} (ID: {file_meta['file_id'][:8]}...)\n"
-                        f"    Size: {file_meta['size']} bytes\n"
+                        f"    Size: {format_file_size(file_meta['size'])}\n"
                         f"    Tags: {', '.join(file_meta['tags'])}\n"
                         f"    Created: {file_meta['created_at']}"
                     )
@@ -646,28 +644,21 @@ class ControllerClient:
                             
                             if total_size > 0:
                                 progress = (downloaded / total_size) * 100
-                                downloaded_mb = downloaded / (1024 * 1024)
-                                total_mb = total_size / (1024 * 1024)
-                                sys.stdout.write(
-                                    f"\rDownloading {filename}: {downloaded_mb:.2f} MB / {total_mb:.2f} MB ({progress:.1f}%)"
-                                )
-                                sys.stdout.flush()
-                            else:
-                                downloaded_mb = downloaded / (1024 * 1024)
-                                sys.stdout.write(
-                                    f"\rDownloading {filename}: {downloaded_mb:.2f} MB"
-                                )
-                                sys.stdout.flush()
+                            sys.stdout.write(
+                                f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({progress:.1f}%)"
+                            )
+                            sys.stdout.flush()
+                        else:
+                            sys.stdout.write(
+                                f"\rDownloading {filename}: {format_file_size(downloaded)}"
                     
                     sys.stdout.write('\n')
                     sys.stdout.flush()
                     
                     if total_size > 0:
-                        size_mb = total_size / (1024 * 1024)
-                        return f"Downloaded: {filename} ({size_mb:.2f} MB)\nSaved to: {output_file.absolute()}"
+                        return f"Downloaded: {filename} ({format_file_size(total_size)})\nSaved to: {output_file.absolute()}"
                     else:
-                        downloaded_mb = downloaded / (1024 * 1024)
-                        return f"Downloaded: {filename} ({downloaded_mb:.2f} MB)\nSaved to: {output_file.absolute()}"
+                        return f"Downloaded: {filename} ({format_file_size(downloaded)})\nSaved to: {output_file.absolute()}"
                 else:
                     response.read()
                     return f"Error: {self._format_error(response)}"
