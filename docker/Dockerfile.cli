@@ -8,6 +8,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY common/ ./common/
 COPY cli/ ./cli/
 
+RUN mkdir -p /uploads /downloads
+
+VOLUME /uploads
+VOLUME /downloads
+
+WORKDIR /uploads
+
 ENV DFS_CONTROLLER_URL=http://controller:8000
 
 CMD ["python", "-m", "cli.main"]

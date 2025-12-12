@@ -54,11 +54,89 @@ Starts 3 chunkserver containers with automatic load balancing.
 
 ### 5. Run CLI
 
+Navigate to the directory containing files you want to upload, then:
+
 ```bash
 ./run-cli.sh
 ```
 
-Starts interactive CLI connected to the controller via Docker DNS.
+Starts interactive CLI with volume mounts for file uploads and downloads.
+
+For cross-platform support:
+- **Linux/macOS**: Use `run-cli.sh`
+- **Windows PowerShell**: Use `run-cli.ps1`
+
+See [COMMANDS.md](COMMANDS.md#step-6-launch-the-cli) for manual deployment options.
+
+## File Upload/Download
+
+The CLI container requires volume mounts to access files on your host machine.
+
+### Volume Mounts
+
+When starting the CLI, two directories are mounted:
+
+- **`/uploads`**: Your current working directory (for file uploads)
+- **`/downloads`**: The `./downloads` subdirectory (for file downloads)
+
+### Upload Files
+
+Navigate to the directory containing your files before starting the CLI:
+
+```bash
+cd /path/to/your/files
+./docker/scripts/run-cli.sh
+```
+
+Inside the CLI, reference files relative to your current directory:
+
+```
+add requirements.txt [dependencies]
+add README.md [docs]
+add src/main.py [code, python]
+```
+
+### Download Files
+
+Downloads are automatically saved to the `downloads/` directory:
+
+```
+download requirements.txt
+```
+
+The file will be saved to `./downloads/requirements.txt` on your host machine.
+
+### Cross-Platform Examples
+
+**Linux/macOS:**
+```bash
+cd ~/my-project
+docker run -it --rm --network dfs-network \
+    -v "$(pwd):/uploads" \
+    -v "$(pwd)/downloads:/downloads" \
+    -w /uploads \
+    redcloud-cli:latest
+```
+
+**Windows PowerShell:**
+```powershell
+cd C:\Users\YourName\my-project
+docker run -it --rm --network dfs-network `
+    -v "${PWD}:/uploads" `
+    -v "${PWD}/downloads:/downloads" `
+    -w /uploads `
+    redcloud-cli:latest
+```
+
+**Windows CMD:**
+```cmd
+cd C:\Users\YourName\my-project
+docker run -it --rm --network dfs-network ^
+    -v "%cd%:/uploads" ^
+    -v "%cd%/downloads:/downloads" ^
+    -w /uploads ^
+    redcloud-cli:latest
+```
 
 ## Multi-Host Deployment
 
