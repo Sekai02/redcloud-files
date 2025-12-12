@@ -44,12 +44,11 @@ class FileService:
         file_id = generate_uuid()
         created_at = datetime.utcnow()
         
-        chunks_with_data = self._split_into_chunks_with_data(file_data, file_id)
-        
+        chunks_metadata = []
         written_chunk_ids = []
         
         try:
-            for chunk_meta, chunk_data in chunks_with_data:
+            for chunk_meta, chunk_data in self._split_into_chunks_with_data(file_data, file_id):
                 success = await self.chunkserver_client.write_chunk(
                     chunk_id=chunk_meta.chunk_id,
                     file_id=chunk_meta.file_id,
@@ -62,7 +61,8 @@ class FileService:
                     raise Exception(f"Failed to write chunk {chunk_meta.chunk_id} to chunkserver")
                 
                 written_chunk_ids.append(chunk_meta.chunk_id)
-                logger.info(f"Wrote chunk {chunk_meta.chunk_index}/{len(chunks_with_data)} for file {file_id}")
+                chunks_metadata.append(chunk_meta)
+                logger.info(f"Wrote chunk {chunk_meta.chunk_index} for file {file_id}")
             
             replaced_file_id = None
             old_chunk_ids = []
@@ -95,12 +95,12 @@ class FileService:
                     self.tag_repo.add_tags(file_id, tags, conn=conn)
                     
                     self.chunk_repo.create_chunks(
-                        [chunk_meta for chunk_meta, _ in chunks_with_data],
+                        chunks_metadata,
                         conn=conn
                     )
                     
                     conn.commit()
-                    logger.info(f"Successfully uploaded file {file_id} with {len(chunks_with_data)} chunks")
+                    logger.info(f"Successfully uploaded file {file_id} with {len(chunks_metadata)} chunks")
                 except Exception as e:
                     conn.rollback()
                     raise
@@ -128,10 +128,9 @@ class FileService:
             replaced_file_id=replaced_file_id,
         )
 
-    def _split_into_chunks_with_data(self, file_data: BinaryIO, file_id: str) -> List[tuple[Chunk, bytes]]:
+    def _split_into_chunks_with_data(self, file_data: BinaryIO, file_id: str):
         from controller.utils import generate_uuid
         
-        chunks = []
         chunk_index = 0
         
         while True:
@@ -150,10 +149,8 @@ class FileService:
                 checksum=checksum,
             )
             
-            chunks.append((chunk_meta, chunk_data))
+            yield (chunk_meta, chunk_data)
             chunk_index += 1
-        
-        return chunks
 
     async def _cleanup_chunks(self, chunk_ids: List[str]) -> List[str]:
         """
