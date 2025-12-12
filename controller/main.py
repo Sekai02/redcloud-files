@@ -150,6 +150,52 @@ async def root():
     return {"message": "RedCloud Files Controller API", "status": "running"}
 
 
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for Docker healthcheck.
+    Returns 200 if service is alive.
+    """
+    return {"status": "healthy", "service": "controller"}
+
+
+@app.get("/ready")
+async def ready_check():
+    """
+    Readiness check endpoint.
+    Verifies database and chunkserver connectivity.
+    """
+    from controller.database import get_db_connection
+    from controller.chunkserver_client import ChunkserverClient
+    
+    try:
+        conn = get_db_connection()
+        conn.close()
+        db_status = "ok"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
+    try:
+        client = ChunkserverClient()
+        await client.ping()
+        await client.close()
+        chunkserver_status = "ok"
+    except Exception as e:
+        chunkserver_status = f"error: {str(e)}"
+    
+    ready = db_status == "ok" and chunkserver_status == "ok"
+    status_code = status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE
+    
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ready": ready,
+            "database": db_status,
+            "chunkserver": chunkserver_status
+        }
+    )
+
+
 def main() -> None:
     """
     Start the FastAPI server with uvicorn.

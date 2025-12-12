@@ -1,6 +1,7 @@
 """In-memory index: chunk_id -> metadata (file_id, chunk_index, length, checksum)."""
 
 import json
+import os
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, Dict
@@ -8,10 +9,11 @@ import logging
 
 from chunkserver.chunk_storage import list_all_chunks, get_chunk_size, get_chunk_path
 from chunkserver.checksum_validator import compute_checksum
+from common.constants import DEFAULT_CHUNK_INDEX_PATH
 
 logger = logging.getLogger(__name__)
 
-INDEX_FILE_PATH = Path("./data/chunk_index.json")
+INDEX_FILE_PATH = Path(os.environ.get("CHUNK_INDEX_PATH", DEFAULT_CHUNK_INDEX_PATH))
 
 
 @dataclass
