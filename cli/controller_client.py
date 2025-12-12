@@ -59,7 +59,7 @@ class ControllerClient:
             Tuple of (normalized_absolute_path, error_message)
             error_message is None if validation succeeds
         """
-        base_dir = Path('/uploads').resolve()
+        base_dir = (Path.cwd() / 'uploads').resolve()
         
         path_str = file_path.strip()
         if not path_str.startswith('uploads/'):
@@ -89,7 +89,7 @@ class ControllerClient:
             Tuple of (normalized_path_object, error_message)
             error_message is None if validation succeeds
         """
-        base_dir = Path('/downloads').resolve()
+        base_dir = (Path.cwd() / 'downloads').resolve()
         
         if output_path:
             path_str = output_path.strip()
