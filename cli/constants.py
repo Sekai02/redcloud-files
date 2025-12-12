@@ -31,12 +31,12 @@ PROMPT_TEXT = "redcloud> "
 HELP_TEXT = """Available commands:
   register <username> <password>      Register new user account
   login <username> <password>         Login and get API key
-  add file-list tag-list              Add files with tags
+  add file-list tag-list              Add files with tags (files must use uploads/ prefix)
   delete tag-query                    Delete files matching tag query
   list tag-query                      List files matching tag query (empty = all)
   add-tags tag-query tag-list         Add tags to files matching tag query
   delete-tags tag-query tag-list      Remove tags from files matching tag query
-  download <filename> [output_path]   Download file by name to local path
+  download <filename> [output_path]   Download file (output uses downloads/ prefix or defaults to downloads/)
   clear                               Clear screen and redisplay welcome message
   help                                Show this help
   exit                                Exit REPL
@@ -46,11 +46,11 @@ Use '--' to separate tag-query from tag-list in add-tags/delete-tags.
 Examples:
   register alice mypassword123
   login alice mypassword123
-  add file1.txt file2.txt important work
+  add uploads/file1.txt uploads/file2.txt important work
   list important
   add-tags important -- urgent
   download document.pdf
-  download report.txt ./downloads/
+  download report.txt downloads/renamed.txt
   delete-tags work urgent -- archived
   delete archived"""
 

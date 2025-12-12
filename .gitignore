@@ -221,3 +221,7 @@ distributed/
 
 # Data folder
 data/
+
+# Uploads and Downloads
+uploads/
+downloads/

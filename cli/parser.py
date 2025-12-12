@@ -69,7 +69,10 @@ def parse_command(input_line: str) -> CommandRequest:
 
 
 def _parse_add(args: list[str]) -> AddCommand:
-    """Parse 'add file-list tag-list' command."""
+    """Parse 'add file-list tag-list' command.
+    
+    Files must use uploads/ prefix (e.g., uploads/file.txt).
+    """
     if len(args) < 2:
         raise ParseError("add requires at least one file and one tag")
 
@@ -182,7 +185,11 @@ def _parse_login(args: list[str]) -> LoginCommand:
 
 
 def _parse_download(args: list[str]) -> DownloadCommand:
-    """Parse 'download <filename> [output_path]' command."""
+    """Parse 'download <filename> [output_path]' command.
+    
+    Output path must use downloads/ prefix if specified (e.g., downloads/file.txt).
+    If output_path is omitted, file is saved to downloads/{filename}.
+    """
     if len(args) < 1:
         raise ParseError("download requires at least 1 argument: <filename> [output_path]")
     

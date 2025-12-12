@@ -158,8 +158,8 @@ docker run -it --rm ^
 
 ### Volume Mounts Explained
 
-- **`/uploads`**: Your current directory is mounted here. Upload paths can use `uploads/` prefix, be relative (auto-resolved to `/uploads`), or be absolute paths within this directory.
-- **`/downloads`**: Downloaded files are saved here automatically (maps to `./downloads` on your host). Download paths can use `downloads/` prefix, be relative (auto-resolved to `/downloads`), or be absolute paths.
+- **`/uploads`**: Your current directory is mounted here. Upload paths must use the `uploads/` prefix (e.g., `add uploads/file.txt [tag]`).
+- **`/downloads`**: Downloaded files are saved here. When no output path is specified, files default to `/downloads/{filename}`. When specifying an output path, it must use the `downloads/` prefix (e.g., `download file.txt downloads/output.txt`).
 - **`-w /uploads`**: Sets the working directory inside the container.
 
 ### Usage Examples
@@ -168,30 +168,31 @@ Once the CLI is running:
 
 **Upload files:**
 ```
-add requirements.txt [dependencies, code]
+add uploads/requirements.txt [dependencies, code]
 add uploads/README.md uploads/.gitignore [docs]
-add chunkserver/main.py [python, server]
+add uploads/chunkserver/main.py [python, server]
 ```
 
 **Download files:**
 ```
 download requirements.txt
-download requirements.txt subfolder/
+download requirements.txt downloads/subfolder/
 download requirements.txt downloads/subfolder/renamed.txt
 ```
 Files are automatically saved to the `downloads/` directory on your host.
+When no output path is specified, files default to downloads/{filename}.
+When specifying an output path, the downloads/ prefix is mandatory.
 
 ### Important Notes
 
-- **Upload paths** can use `uploads/` prefix, be relative (resolved to `/uploads`), or be absolute paths within `/uploads`
-- **Download paths** can use `downloads/` prefix, be relative (resolved to `/downloads`), or be absolute paths within `/downloads` or `/uploads`
-- **File paths are relative** to their respective directories (`/uploads` for uploads, `/downloads` for downloads)
+- **Upload paths** must use the `uploads/` prefix (e.g., `add uploads/file.txt [tag]`)
+- **Download paths** must use the `downloads/` prefix when specifying an output path (e.g., `download file.txt downloads/output.txt`)
+- **Default download behavior**: When no output path is specified, files are saved to `/downloads/{filename}` (no prefix needed)
 - Navigate to your files directory **before** starting the CLI container
-- Downloads default to `/downloads/{filename}` when no output path is specified
-- The container working directory is `/uploads`, so relative upload paths work naturally
-- **Path validation** prevents directory traversal attacks (e.g., `../../../etc/passwd`) and restricts file access to `/uploads` and `/downloads` directories only
-- **Wrong prefix errors**: Using `downloads/` in upload commands or `uploads/` in download commands will return a helpful error message
-- **Security boundary**: Absolute paths outside `/uploads` and `/downloads` directories are blocked for security reasons
+- The container working directory is `/uploads`, so files in subdirectories use paths like `uploads/subfolder/file.txt`
+- **Path validation** prevents directory traversal attacks and restricts file access to appropriate directories
+- **Prefix enforcement**: Upload paths without `uploads/` prefix and download output paths without `downloads/` prefix will return helpful error messages
+- **Security boundary**: Mandatory prefixes ensure uploads only read from `/uploads` and downloads only write to `/downloads`
 
 ---
 

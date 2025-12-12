@@ -27,10 +27,10 @@ class ControllerClient:
 
     def _normalize_upload_path(self, file_path: str) -> tuple[str, str | None]:
         """
-        Normalize upload path by handling uploads/ prefix and validating boundaries.
+        Normalize upload path by validating mandatory uploads/ prefix.
 
         Args:
-            file_path: Input file path (can include uploads/ prefix or be relative)
+            file_path: Input file path (must start with uploads/ prefix)
 
         Returns:
             Tuple of (normalized_absolute_path, error_message)
@@ -39,31 +39,27 @@ class ControllerClient:
         base_dir = Path('/uploads').resolve()
         
         path_str = file_path.strip()
-        if path_str.startswith('downloads/'):
-            return "", "Cannot use 'downloads/' prefix in upload command. Use 'uploads/' or relative paths."
+        if not path_str.startswith('uploads/'):
+            return "", f"Upload path must start with 'uploads/' - did you mean 'uploads/{path_str}'?"
         
-        if path_str.startswith('uploads/'):
-            path_str = path_str[8:]
+        path_str = path_str[8:]
         
-        normalized_path = Path(os.path.expanduser(path_str))
-        if not normalized_path.is_absolute():
-            normalized_path = base_dir / normalized_path
+        normalized_path = base_dir / path_str
         
         try:
             resolved_path = normalized_path.resolve()
-            if not str(resolved_path).startswith(str(base_dir)):
-                return "", f"Invalid path: '{file_path}' is outside uploads directory"
-        except (OSError, RuntimeError):
-            return "", f"Invalid path: '{file_path}'"
+            resolved_path.relative_to(base_dir)
+        except (OSError, RuntimeError, ValueError):
+            return "", f"Invalid path: '{file_path}' is outside uploads directory"
         
         return str(resolved_path), None
 
     def _normalize_download_path(self, output_path: str, filename: str) -> tuple[Path, str | None]:
         """
-        Normalize download path by handling downloads/ prefix and validating boundaries.
+        Normalize download path by validating mandatory downloads/ prefix when specified.
 
         Args:
-            output_path: Output path (can include downloads/ prefix, be relative, or absolute)
+            output_path: Output path (must start with downloads/ prefix if provided)
             filename: Original filename for default naming
 
         Returns:
@@ -74,25 +70,21 @@ class ControllerClient:
         
         if output_path:
             path_str = output_path.strip()
-            if path_str.startswith('uploads/'):
-                return Path(), "Cannot use 'uploads/' prefix in download command. Use 'downloads/' or relative paths."
+            if not path_str.startswith('downloads/'):
+                return Path(), f"Download output path must start with 'downloads/' - did you mean 'downloads/{path_str}'?"
             
-            if path_str.startswith('downloads/'):
-                path_str = path_str[10:]
+            path_str = path_str[10:]
             
-            output_file = Path(path_str)
-            if not output_file.is_absolute():
-                output_file = base_dir / output_file
+            output_file = base_dir / path_str
             
             try:
                 if output_file.exists() and output_file.is_dir():
                     output_file = output_file / filename
                 
                 resolved_path = output_file.resolve()
-                if not str(resolved_path).startswith(str(base_dir)) and not str(resolved_path).startswith('/uploads'):
-                    return Path(), f"Invalid path: '{output_path}' is outside allowed directories"
-            except (OSError, RuntimeError):
-                return Path(), f"Invalid path: '{output_path}'"
+                resolved_path.relative_to(base_dir)
+            except (OSError, RuntimeError, ValueError):
+                return Path(), f"Invalid path: '{output_path}' is outside downloads directory"
         else:
             output_file = base_dir / filename
         
