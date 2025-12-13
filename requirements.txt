@@ -1,0 +1,20 @@
+# Core application dependencies
+prompt_toolkit>=3.0.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+bcrypt>=4.0.0
+python-multipart>=0.0.6
+
+# HTTP client for CLI-controller communication
+httpx>=0.25.0
+
+# gRPC for controller-chunkserver communication
+grpcio>=1.59.0
+grpcio-tools>=1.59.0
+
+# Testing dependencies
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.12.0

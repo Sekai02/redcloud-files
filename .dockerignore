@@ -1,5 +1,0 @@
-bin/
-.git/
-*.log
-*.tmp
-**/.DS_Store
