@@ -1,6 +1,6 @@
 """Pydantic schemas for file operation endpoints."""
 
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 
 
@@ -10,7 +10,7 @@ class AddFileResponse(BaseModel):
     name: str
     size: int
     tags: List[str]
-    replaced_file_id: str = None
+    replaced_file_id: Optional[str] = None
 
 
 class FileMetadataResponse(BaseModel):

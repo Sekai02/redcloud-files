@@ -10,6 +10,7 @@ import httpx
 from common.logging_config import get_logger
 from cli.config import Config
 from cli.utils import format_file_size, ProgressFileWrapper
+from cli.constants import GREEN, RESET
 
 logger = get_logger(__name__)
 
