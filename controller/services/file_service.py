@@ -120,7 +120,31 @@ class FileService:
                 except Exception as e:
                     conn.rollback()
                     raise
-            
+
+            await self._add_file_to_gossip(
+                file_id=file_id,
+                name=file_name,
+                size=file_size,
+                owner_id=owner_id,
+                created_at=created_at,
+                tags=tags,
+                chunks=chunks_metadata,
+                operation='create'
+            )
+
+            if replaced_file_id:
+                await self._add_file_to_gossip(
+                    file_id=replaced_file_id,
+                    name=file_name,
+                    size=0,
+                    owner_id=owner_id,
+                    created_at=created_at,
+                    tags=[],
+                    chunks=[],
+                    operation='delete',
+                    deleted=True
+                )
+
             if old_chunk_ids:
                 logger.info(f"Cleaning up {len(old_chunk_ids)} chunks from replaced file")
                 await self._cleanup_chunks(old_chunk_ids)
@@ -345,41 +369,55 @@ class FileService:
 
     async def delete_files(self, tags: List[str], user_id: str) -> List[str]:
         files = self.file_repo.query_by_tags_and_owner(tags, user_id)
-        
+
         deleted_file_ids = []
         chunks_to_delete = []
-        
+
         for file in files:
             chunks = self.chunk_repo.get_chunks_by_file(file.file_id)
             chunks_to_delete.extend([chunk.chunk_id for chunk in chunks])
-        
+
         with get_db_connection() as conn:
             try:
                 for file in files:
                     self.file_repo.delete_file(file.file_id, conn=conn)
                     deleted_file_ids.append(file.file_id)
-                
+
                 conn.commit()
             except Exception as e:
                 conn.rollback()
                 raise
-        
+
+        for file in files:
+            file_tags = self.tag_repo.get_tags_for_file(file.file_id)
+            await self._add_file_to_gossip(
+                file_id=file.file_id,
+                name=file.name,
+                size=file.size,
+                owner_id=file.owner_id,
+                created_at=file.created_at,
+                tags=file_tags,
+                chunks=[],
+                operation='delete',
+                deleted=True
+            )
+
         if chunks_to_delete:
             logger.info(f"Deleting {len(chunks_to_delete)} chunks from chunkserver")
             await self._cleanup_chunks(chunks_to_delete)
-        
+
         return deleted_file_ids
 
     def get_file_metadata(self, file_id: str, user_id: str) -> FileMetadata:
         file = self.file_repo.get_by_id(file_id)
         if file is None:
             raise FileNotFoundError(f"File {file_id} not found")
-        
+
         if file.owner_id != user_id:
             raise UnauthorizedAccessError(f"User {user_id} does not own file {file_id}")
-        
+
         tags = self.tag_repo.get_tags_for_file(file_id)
-        
+
         return FileMetadata(
             file_id=file.file_id,
             name=file.name,
@@ -388,3 +426,59 @@ class FileService:
             owner_id=file.owner_id,
             created_at=file.created_at,
         )
+
+    async def _add_file_to_gossip(
+        self,
+        file_id: str,
+        name: str,
+        size: int,
+        owner_id: str,
+        created_at: datetime,
+        tags: List[str],
+        chunks: List[Chunk],
+        operation: str,
+        deleted: bool = False
+    ):
+        """
+        Add file to gossip log for replication across controllers.
+        """
+        try:
+            from controller.routes.internal_routes import _gossip_service
+            from controller.distributed_config import CONTROLLER_NODE_ID
+
+            if _gossip_service is None:
+                logger.debug("Gossip service not available, skipping replication")
+                return
+
+            file_data = {
+                'file_id': file_id,
+                'name': name,
+                'size': size,
+                'owner_id': owner_id,
+                'created_at': created_at.isoformat(),
+                'deleted': 1 if deleted else 0,
+                'tags': tags,
+                'chunks': [
+                    {
+                        'chunk_id': chunk.chunk_id,
+                        'chunk_index': chunk.chunk_index,
+                        'size': chunk.size,
+                        'checksum': chunk.checksum
+                    }
+                    for chunk in chunks
+                ],
+                'vector_clock': '{}',
+                'last_modified_by': CONTROLLER_NODE_ID,
+                'version': 1
+            }
+
+            await _gossip_service.add_to_gossip_log(
+                entity_type='file',
+                entity_id=file_id,
+                operation=operation,
+                data=file_data
+            )
+
+            logger.debug(f"Added file to gossip log: {name} ({operation})")
+        except Exception as e:
+            logger.warning(f"Failed to add file to gossip log: {e}")

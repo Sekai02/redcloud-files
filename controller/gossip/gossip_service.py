@@ -268,16 +268,9 @@ class GossipService:
             cursor = conn.cursor()
 
             if entity_type == 'file':
-                cursor.execute("""
-                    INSERT OR REPLACE INTO files
-                    (file_id, name, size, owner_id, created_at, deleted, vector_clock, last_modified_by, version)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    data['file_id'], data['name'], data['size'], data['owner_id'],
-                    data['created_at'], data.get('deleted', 0),
-                    data.get('vector_clock', '{}'), data.get('last_modified_by'),
-                    data.get('version', 0)
-                ))
+                from controller.repositories.file_repository import FileRepository
+                FileRepository.merge_file(data, conn=conn)
+                return
             elif entity_type == 'chunk':
                 cursor.execute("""
                     INSERT OR REPLACE INTO chunks
