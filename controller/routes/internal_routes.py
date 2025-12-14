@@ -97,6 +97,35 @@ async def register_peer(
     return {"status": "registered"}
 
 
+@router.post("/peers/unregister")
+async def unregister_peer(
+    peer_info: Dict[str, str],
+    peer_registry: PeerRegistry = Depends(get_peer_registry),
+    gossip_service: GossipService = Depends(get_gossip_service)
+):
+    """
+    Allow controllers to gracefully unregister themselves.
+    Gossips removal to all other controllers.
+    """
+    node_id = peer_info["node_id"]
+
+    await peer_registry.remove_peer(node_id)
+
+    if gossip_service:
+        await gossip_service.add_to_gossip_log(
+            entity_type="controller_peer_remove",
+            entity_id=node_id,
+            operation="unregister",
+            data={
+                "node_id": node_id,
+                "timestamp": time.time()
+            }
+        )
+
+    logger.info(f"Unregistered peer: {node_id}")
+    return {"status": "unregistered"}
+
+
 @router.post("/gossip/receive")
 async def receive_gossip_updates(
     payload: Dict[str, Any],

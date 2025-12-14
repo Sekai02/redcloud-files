@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Dict
+from typing import List, Optional
 
 from common.logging_config import get_logger
 from controller.database import get_db_connection
@@ -100,9 +100,9 @@ class UserRepository:
                 api_key=row["api_key"],
                 created_at=datetime.fromisoformat(row["created_at"]),
                 key_updated_at=datetime.fromisoformat(row["key_updated_at"]) if row["key_updated_at"] else None,
-                vector_clock=VectorClock.from_json(row["vector_clock"]) if row.get("vector_clock") else None,
-                last_modified_by=row.get("last_modified_by"),
-                version=row.get("version", 0),
+                vector_clock=VectorClock.from_json(row["vector_clock"]) if row["vector_clock"] else None,
+                last_modified_by=row["last_modified_by"] if row["last_modified_by"] else None,
+                version=row["version"] if row["version"] else 0,
             )
 
     @staticmethod
@@ -130,9 +130,9 @@ class UserRepository:
                 api_key=row["api_key"],
                 created_at=datetime.fromisoformat(row["created_at"]),
                 key_updated_at=datetime.fromisoformat(row["key_updated_at"]) if row["key_updated_at"] else None,
-                vector_clock=VectorClock.from_json(row["vector_clock"]) if row.get("vector_clock") else None,
-                last_modified_by=row.get("last_modified_by"),
-                version=row.get("version", 0),
+                vector_clock=VectorClock.from_json(row["vector_clock"]) if row["vector_clock"] else None,
+                last_modified_by=row["last_modified_by"] if row["last_modified_by"] else None,
+                version=row["version"] if row["version"] else 0,
             )
 
     @staticmethod
@@ -180,7 +180,7 @@ class UserRepository:
                 raise
 
     @staticmethod
-    def get_all_users() -> list[User]:
+    def get_all_users() -> List[User]:
         logger.debug("Fetching all users")
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -200,9 +200,9 @@ class UserRepository:
                     api_key=row["api_key"],
                     created_at=datetime.fromisoformat(row["created_at"]),
                     key_updated_at=datetime.fromisoformat(row["key_updated_at"]) if row["key_updated_at"] else None,
-                    vector_clock=VectorClock.from_json(row["vector_clock"]) if row.get("vector_clock") else None,
-                    last_modified_by=row.get("last_modified_by"),
-                    version=row.get("version", 0),
+                    vector_clock=VectorClock.from_json(row["vector_clock"]) if row["vector_clock"] else None,
+                    last_modified_by=row["last_modified_by"] if row["last_modified_by"] else None,
+                    version=row["version"] if row["version"] else 0,
                 ))
 
             logger.debug(f"Fetched {len(users)} users")
@@ -233,9 +233,9 @@ class UserRepository:
                 api_key=row["api_key"],
                 created_at=datetime.fromisoformat(row["created_at"]),
                 key_updated_at=datetime.fromisoformat(row["key_updated_at"]) if row["key_updated_at"] else None,
-                vector_clock=VectorClock.from_json(row["vector_clock"]) if row.get("vector_clock") else None,
-                last_modified_by=row.get("last_modified_by"),
-                version=row.get("version", 0),
+                vector_clock=VectorClock.from_json(row["vector_clock"]) if row["vector_clock"] else None,
+                last_modified_by=row["last_modified_by"] if row["last_modified_by"] else None,
+                version=row["version"] if row["version"] else 0,
             )
 
     @staticmethod

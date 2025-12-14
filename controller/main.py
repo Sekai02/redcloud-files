@@ -49,6 +49,42 @@ health_monitor = None
 repair_service = None
 
 
+async def peer_persistence_loop(peer_registry):
+    """
+    Periodically persist peer state to database.
+    """
+    while True:
+        try:
+            await asyncio.sleep(30)
+            await peer_registry.persist_to_database()
+        except Exception as e:
+            logger.error(f"Peer persistence error: {e}", exc_info=True)
+
+
+async def peer_cleanup_loop(peer_registry):
+    """
+    Periodically cleanup stale peers.
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await peer_registry.cleanup_stale_peers(120)
+        except Exception as e:
+            logger.error(f"Peer cleanup error: {e}", exc_info=True)
+
+
+async def chunkserver_cleanup_loop(chunkserver_registry):
+    """
+    Periodically cleanup stale chunkservers.
+    """
+    while True:
+        try:
+            await asyncio.sleep(60)
+            await chunkserver_registry.cleanup_stale_servers(60)
+        except Exception as e:
+            logger.error(f"Chunkserver cleanup error: {e}", exc_info=True)
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """
@@ -165,9 +201,15 @@ async def startup_event():
         set_cs_registry(chunkserver_registry)
         set_health_monitor(health_monitor)
 
+        await chunkserver_registry.load_from_database()
+        await peer_registry.load_from_database()
         await peer_registry.discover_initial_peers()
         await peer_registry.register_with_peers()
         await peer_registry.start_periodic_refresh(PEER_DNS_REFRESH_INTERVAL)
+
+        asyncio.create_task(peer_persistence_loop(peer_registry))
+        asyncio.create_task(peer_cleanup_loop(peer_registry))
+        asyncio.create_task(chunkserver_cleanup_loop(chunkserver_registry))
 
         await gossip_service.start()
         await health_monitor.start()

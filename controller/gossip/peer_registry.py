@@ -22,6 +22,34 @@ class PeerRegistry:
         self.my_ip = advertise_addr.split(":")[0]
         self.running = False
 
+    async def load_from_database(self):
+        """
+        Load persisted peers from database on startup.
+        Restores peer topology after controller restart.
+        """
+        from controller.database import get_db_connection
+        
+        async with self.lock:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT node_id, address, last_seen
+                    FROM controller_nodes
+                """)
+                rows = cursor.fetchall()
+                
+                for row in rows:
+                    node_id = row['node_id']
+                    if node_id != self.node_id:
+                        self.peers[node_id] = {
+                            "address": row['address'],
+                            "last_seen": row['last_seen']
+                        }
+                
+                count = len(self.peers)
+                logger.info(f"Loaded {count} peers from database")
+                return count
+
     async def discover_initial_peers(self):
         """
         Bootstrap by resolving service DNS to all controller IPs.
@@ -165,6 +193,47 @@ class PeerRegistry:
             if node_id in self.peers:
                 del self.peers[node_id]
                 logger.info(f"Removed peer: {node_id}")
+
+    async def persist_to_database(self):
+        """
+        Write current in-memory peer state to database.
+        Provides recovery snapshot for restart scenarios.
+        """
+        from controller.database import get_db_connection
+        
+        async with self.lock:
+            peers_snapshot = dict(self.peers)
+        
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            for node_id, info in peers_snapshot.items():
+                cursor.execute("""
+                    INSERT OR REPLACE INTO controller_nodes
+                    (node_id, address, last_seen, vector_clock)
+                    VALUES (?, ?, ?, ?)
+                """, (node_id, info['address'], info['last_seen'], '{}'))
+            conn.commit()
+            logger.debug(f"Persisted {len(peers_snapshot)} peers to database")
+
+    async def cleanup_stale_peers(self, timeout_seconds: int = 120):
+        """
+        Remove peers that haven't been seen within timeout period.
+        Prevents unbounded memory growth from departed peers.
+        """
+        async with self.lock:
+            cutoff_time = time.time() - timeout_seconds
+            stale_peers = [
+                node_id for node_id, info in self.peers.items()
+                if info['last_seen'] < cutoff_time
+            ]
+            
+            for node_id in stale_peers:
+                del self.peers[node_id]
+            
+            if stale_peers:
+                logger.info(f"Cleaned up {len(stale_peers)} stale peers: {stale_peers}")
+            
+            return len(stale_peers)
 
     def get_random_peers(self, count: int) -> List[Dict[str, str]]:
         """Get random subset of peers for gossip"""

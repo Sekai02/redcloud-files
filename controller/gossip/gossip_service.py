@@ -46,6 +46,7 @@ class GossipService:
         self.running = True
         asyncio.create_task(self._gossip_loop())
         asyncio.create_task(self._anti_entropy_loop())
+        asyncio.create_task(self._consistency_check_loop())
         logger.info("Gossip service started")
 
     async def stop(self):
@@ -307,6 +308,15 @@ class GossipService:
                     data['node_id'], data['address'], data.get('last_seen', time.time()),
                     data.get('vector_clock', '{}')
                 ))
+                
+                await self.peer_registry.add_peer(data['node_id'], data['address'])
+            elif entity_type == 'controller_peer_remove':
+                cursor.execute("""
+                    DELETE FROM controller_nodes
+                    WHERE node_id = ?
+                """, (data['node_id'],))
+                
+                await self.peer_registry.remove_peer(data['node_id'])
 
             conn.commit()
 
@@ -336,3 +346,46 @@ class GossipService:
             conn.commit()
 
         logger.debug(f"Added to gossip log: {entity_type}:{entity_id} ({operation})")
+
+    async def _consistency_check_loop(self):
+        """
+        Periodically check consistency between database and in-memory peer registry.
+        Logs discrepancies for debugging and optionally repairs drift.
+        """
+        while self.running:
+            try:
+                await asyncio.sleep(300)
+                await self._check_peer_consistency()
+            except Exception as e:
+                logger.error(f"Consistency check error: {e}", exc_info=True)
+
+    async def _check_peer_consistency(self):
+        """
+        Compare controller_nodes table with PeerRegistry memory.
+        """
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT node_id, address FROM controller_nodes
+            """)
+            db_peers = {row['node_id']: row['address'] for row in cursor.fetchall()}
+        
+        memory_peers = {
+            node_id: info['address']
+            for node_id, info in self.peer_registry.peers.items()
+        }
+        
+        only_in_db = set(db_peers.keys()) - set(memory_peers.keys())
+        only_in_memory = set(memory_peers.keys()) - set(db_peers.keys())
+        
+        if only_in_db or only_in_memory:
+            logger.warning(
+                f"Peer consistency drift detected - "
+                f"only_in_db={list(only_in_db)}, only_in_memory={list(only_in_memory)}"
+            )
+            
+            for node_id in only_in_db:
+                await self.peer_registry.add_peer(node_id, db_peers[node_id])
+                logger.info(f"Auto-repaired: added {node_id} from database to memory")
+        else:
+            logger.debug("Peer consistency check passed")
