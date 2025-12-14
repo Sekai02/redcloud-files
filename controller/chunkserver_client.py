@@ -41,10 +41,13 @@ class ChunkserverClient:
     Handles connection management and RPC calls.
     """
     
-    def __init__(self):
+    def __init__(self, target: str = None):
         """Initialize client with lazy connection."""
         self._channel = None
-        self._target = f"{CHUNKSERVER_SERVICE_NAME}:{CHUNKSERVER_PORT}"
+        if target:
+            self._target = target
+        else:
+            self._target = f"{CHUNKSERVER_SERVICE_NAME}:{CHUNKSERVER_PORT}"
     
     def _ensure_channel(self):
         """Ensure gRPC channel is established."""

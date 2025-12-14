@@ -47,7 +47,27 @@ class ChunkIndex:
             entry: ChunkIndexEntry to add
         """
         self._index[entry.chunk_id] = entry
-    
+
+    def add(self, chunk_id: str, file_id: str, chunk_index: int, size: int, checksum: str) -> None:
+        """
+        Add or update chunk entry in index.
+
+        Args:
+            chunk_id: UUID of the chunk
+            file_id: UUID of the file
+            chunk_index: Index of chunk within file
+            size: Size in bytes
+            checksum: SHA256 checksum
+        """
+        entry = ChunkIndexEntry(
+            chunk_id=chunk_id,
+            file_id=file_id,
+            chunk_index=chunk_index,
+            size=size,
+            checksum=checksum,
+            filepath=str(get_chunk_path(chunk_id))
+        )
+        self._index[chunk_id] = entry    
     def get_chunk(self, chunk_id: str) -> Optional[ChunkIndexEntry]:
         """
         Retrieve chunk metadata by ID.
@@ -95,6 +115,15 @@ class ChunkIndex:
             List of chunk IDs
         """
         return list(self._index.keys())
+
+    def list_all(self) -> Dict[str, ChunkIndexEntry]:
+        """
+        Get all chunks in the index.
+
+        Returns:
+            Dictionary mapping chunk_id to ChunkIndexEntry
+        """
+        return self._index.copy()
     
     def count(self) -> int:
         """

@@ -12,6 +12,12 @@ from controller.config import CONTROLLER_HOST, CONTROLLER_PORT
 from controller.database import init_database
 from controller.routes.auth_routes import router as auth_router
 from controller.routes.file_routes import router as file_router
+from controller.routes.internal_routes import router as internal_router
+from controller.routes.internal_routes import (
+    set_gossip_service,
+    set_peer_registry,
+    set_chunkserver_registry
+)
 from controller.cleanup_task import OrphanedChunkCleaner
 from controller.exceptions import (
     DFSException,
@@ -35,6 +41,12 @@ app = FastAPI(
 )
 
 cleanup_task = OrphanedChunkCleaner()
+
+peer_registry = None
+gossip_service = None
+chunkserver_registry = None
+health_monitor = None
+repair_service = None
 
 
 @app.middleware("http")
@@ -72,9 +84,98 @@ async def startup_event():
     """
     Initialize database and start background tasks on application startup.
     """
+    global peer_registry, gossip_service, chunkserver_registry, health_monitor, repair_service
+
     logger.info("Controller service starting up...")
+
     init_database()
     logger.info("Database initialized")
+
+    try:
+        from controller.distributed_config import (
+            CONTROLLER_NODE_ID,
+            CONTROLLER_ADVERTISE_ADDR,
+            CONTROLLER_SERVICE_NAME,
+            GOSSIP_INTERVAL,
+            ANTI_ENTROPY_INTERVAL,
+            GOSSIP_FANOUT,
+            HEARTBEAT_TIMEOUT,
+            REPAIR_INTERVAL,
+            MIN_CHUNK_REPLICAS
+        )
+        from controller.gossip.peer_registry import PeerRegistry
+        from controller.gossip.gossip_service import GossipService
+        from controller.chunkserver_registry import ChunkserverRegistry
+        from controller.chunkserver_health import ChunkserverHealthMonitor
+        from controller.chunk_repair import ChunkRepairService
+        from controller.chunk_placement import ChunkPlacementManager
+        from controller.replication_manager import ReplicationManager
+        from controller.service_locator import (
+            set_replication_manager,
+            set_placement_manager,
+            set_chunkserver_registry as set_cs_registry,
+            set_health_monitor
+        )
+
+        logger.info(f"Starting distributed controller: node_id={CONTROLLER_NODE_ID}, addr={CONTROLLER_ADVERTISE_ADDR}")
+
+        peer_registry = PeerRegistry(
+            node_id=CONTROLLER_NODE_ID,
+            advertise_addr=CONTROLLER_ADVERTISE_ADDR,
+            service_name=CONTROLLER_SERVICE_NAME
+        )
+
+        gossip_service = GossipService(
+            node_id=CONTROLLER_NODE_ID,
+            peer_registry=peer_registry,
+            gossip_interval=GOSSIP_INTERVAL,
+            anti_entropy_interval=ANTI_ENTROPY_INTERVAL,
+            fanout=GOSSIP_FANOUT
+        )
+
+        chunkserver_registry = ChunkserverRegistry()
+
+        health_monitor = ChunkserverHealthMonitor(
+            chunkserver_registry=chunkserver_registry,
+            heartbeat_timeout=HEARTBEAT_TIMEOUT
+        )
+
+        placement_manager = ChunkPlacementManager(min_replicas=MIN_CHUNK_REPLICAS)
+
+        replication_manager = ReplicationManager(
+            placement_manager=placement_manager,
+            chunkserver_registry=chunkserver_registry
+        )
+
+        repair_service = ChunkRepairService(
+            placement_manager=placement_manager,
+            chunkserver_registry=chunkserver_registry,
+            repair_interval=REPAIR_INTERVAL
+        )
+
+        set_peer_registry(peer_registry)
+        set_gossip_service(gossip_service)
+        set_chunkserver_registry(chunkserver_registry)
+        set_replication_manager(replication_manager)
+        set_placement_manager(placement_manager)
+        set_cs_registry(chunkserver_registry)
+        set_health_monitor(health_monitor)
+
+        await peer_registry.discover_initial_peers()
+        await peer_registry.register_with_peers()
+
+        await gossip_service.start()
+        await health_monitor.start()
+        await repair_service.start()
+
+        logger.info("Distributed services started")
+
+    except ImportError:
+        logger.info("Distributed config not available - running in standalone mode")
+    except Exception as e:
+        logger.error(f"Failed to start distributed services: {e}", exc_info=True)
+        logger.info("Continuing in standalone mode")
+
     await cleanup_task.start()
     logger.info("Background cleanup task started")
 
@@ -85,6 +186,19 @@ async def shutdown_event():
     Cleanup resources on application shutdown.
     """
     logger.info("Controller service shutting down...")
+
+    if gossip_service:
+        await gossip_service.stop()
+        logger.info("Gossip service stopped")
+
+    if health_monitor:
+        await health_monitor.stop()
+        logger.info("Health monitor stopped")
+
+    if repair_service:
+        await repair_service.stop()
+        logger.info("Repair service stopped")
+
     await cleanup_task.stop()
     logger.info("Cleanup task stopped")
 
@@ -229,6 +343,7 @@ async def not_implemented_handler(request: Request, exc: NotImplementedError):
 
 app.include_router(auth_router)
 app.include_router(file_router)
+app.include_router(internal_router)
 
 
 @app.get("/")
