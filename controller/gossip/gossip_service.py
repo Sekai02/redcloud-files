@@ -245,28 +245,35 @@ class GossipService:
 
     async def _store_entity(self, entity_type: str, data: Dict[str, Any]):
         """Store or update an entity"""
+        if entity_type == 'user':
+            from controller.repositories.user_repository import UserRepository, User
+            from datetime import datetime
+
+            user = User(
+                user_id=data['user_id'],
+                username=data['username'],
+                password_hash=data['password_hash'],
+                api_key=data.get('api_key'),
+                created_at=datetime.fromisoformat(data['created_at']),
+                key_updated_at=datetime.fromisoformat(data['key_updated_at']) if data.get('key_updated_at') else None,
+                vector_clock=VectorClock.from_json(data.get('vector_clock', '{}')) if data.get('vector_clock') else None,
+                last_modified_by=data.get('last_modified_by'),
+                version=data.get('version', 0)
+            )
+            UserRepository.merge_user(user)
+            return
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
             if entity_type == 'file':
                 cursor.execute("""
-                    INSERT OR REPLACE INTO files 
+                    INSERT OR REPLACE INTO files
                     (file_id, name, size, owner_id, created_at, deleted, vector_clock, last_modified_by, version)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     data['file_id'], data['name'], data['size'], data['owner_id'],
                     data['created_at'], data.get('deleted', 0),
-                    data.get('vector_clock', '{}'), data.get('last_modified_by'),
-                    data.get('version', 0)
-                ))
-            elif entity_type == 'user':
-                cursor.execute("""
-                    INSERT OR REPLACE INTO users
-                    (user_id, username, password_hash, api_key, created_at, key_updated_at, vector_clock, last_modified_by, version)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    data['user_id'], data['username'], data['password_hash'],
-                    data.get('api_key'), data['created_at'], data.get('key_updated_at'),
                     data.get('vector_clock', '{}'), data.get('last_modified_by'),
                     data.get('version', 0)
                 ))
