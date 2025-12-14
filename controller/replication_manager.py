@@ -39,60 +39,116 @@ class ReplicationManager:
         file_id: str,
         chunk_index: int,
         data: bytes,
-        checksum: str
+        checksum: str,
+        max_retries: int = 3
     ) -> bool:
         """
-        Write chunk to N chunkservers in parallel.
+        Write chunk to N chunkservers in parallel with retry logic.
 
-        Returns True if at least one write succeeds.
-        Records all successful locations in chunk_locations table.
+        If all writes fail, refreshes the server list and retries.
+        This handles the race condition where servers are marked as failed
+        during write operations but may recover shortly after.
+
+        Args:
+            chunk_id: UUID of chunk
+            file_id: UUID of parent file
+            chunk_index: Index of chunk in file
+            data: Raw chunk data bytes
+            checksum: SHA256 checksum of data
+            max_retries: Maximum number of retry attempts (default: 3)
+
+        Returns:
+            True if at least one write succeeds
+
+        Raises:
+            Exception: If all retries fail to write to any chunkserver
         """
-        available_servers = await self.chunkserver_registry.get_healthy_servers()
+        last_exception = None
 
-        target_servers = await self.placement.select_chunkservers_for_write(
-            chunk_id=chunk_id,
-            available_servers=available_servers
-        )
+        for attempt in range(max_retries):
+            try:
+                available_servers = await self.chunkserver_registry.get_healthy_servers()
 
-        if not target_servers:
-            raise Exception("No chunkservers available for write")
-
-        logger.info(f"Writing chunk {chunk_id} to {len(target_servers)} servers: {target_servers}")
-
-        write_tasks = []
-        for server_id in target_servers:
-            server_info = next(s for s in available_servers if s['node_id'] == server_id)
-            client = self.get_client(server_id, server_info['address'])
-
-            write_tasks.append(
-                self._write_to_server(
-                    client=client,
-                    server_id=server_id,
+                target_servers = await self.placement.select_chunkservers_for_write(
                     chunk_id=chunk_id,
-                    file_id=file_id,
-                    chunk_index=chunk_index,
-                    data=data,
-                    checksum=checksum
+                    available_servers=available_servers
                 )
-            )
 
-        results = await asyncio.gather(*write_tasks, return_exceptions=True)
+                if not target_servers:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt
+                        logger.warning(
+                            f"No chunkservers available for write (attempt {attempt + 1}/{max_retries}). "
+                            f"Retrying in {wait_time}s..."
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        raise Exception("No chunkservers available for write after all retries")
 
-        successful_servers = []
-        with get_db_connection() as conn:
-            for server_id, result in zip(target_servers, results):
-                if result is True:
-                    successful_servers.append(server_id)
-                    await self.placement.record_chunk_location(chunk_id, server_id, conn)
-                    logger.debug(f"Successfully wrote chunk {chunk_id} to {server_id}")
+                logger.info(
+                    f"Writing chunk {chunk_id} to {len(target_servers)} servers: {target_servers} "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+
+                write_tasks = []
+                for server_id in target_servers:
+                    server_info = next(s for s in available_servers if s['node_id'] == server_id)
+                    client = self.get_client(server_id, server_info['address'])
+
+                    write_tasks.append(
+                        self._write_to_server(
+                            client=client,
+                            server_id=server_id,
+                            chunk_id=chunk_id,
+                            file_id=file_id,
+                            chunk_index=chunk_index,
+                            data=data,
+                            checksum=checksum
+                        )
+                    )
+
+                results = await asyncio.gather(*write_tasks, return_exceptions=True)
+
+                successful_servers = []
+                with get_db_connection() as conn:
+                    for server_id, result in zip(target_servers, results):
+                        if result is True:
+                            successful_servers.append(server_id)
+                            await self.placement.record_chunk_location(chunk_id, server_id, conn)
+                            logger.debug(f"Successfully wrote chunk {chunk_id} to {server_id}")
+                        else:
+                            logger.warning(f"Failed to write chunk {chunk_id} to {server_id}: {result}")
+
+                if successful_servers:
+                    logger.info(
+                        f"Chunk {chunk_id} written to {len(successful_servers)}/{len(target_servers)} servers"
+                    )
+                    return True
+
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    logger.warning(
+                        f"All writes failed for chunk {chunk_id} (attempt {attempt + 1}/{max_retries}). "
+                        f"Refreshing server list and retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
                 else:
-                    logger.warning(f"Failed to write chunk {chunk_id} to {server_id}: {result}")
+                    last_exception = Exception(f"Failed to write chunk {chunk_id} to any chunkserver after {max_retries} attempts")
 
-        if not successful_servers:
-            raise Exception(f"Failed to write chunk {chunk_id} to any chunkserver")
+            except Exception as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    logger.error(
+                        f"Error writing chunk {chunk_id} (attempt {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
 
-        logger.info(f"Chunk {chunk_id} written to {len(successful_servers)}/{len(target_servers)} servers")
-        return True
+        raise last_exception if last_exception else Exception(f"Failed to write chunk {chunk_id} to any chunkserver")
 
     async def _write_to_server(
         self,

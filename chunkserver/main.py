@@ -35,15 +35,26 @@ async def serve(chunk_index: ChunkIndex) -> None:
             CHUNKSERVER_NODE_ID,
             CHUNKSERVER_ADVERTISE_ADDR,
             CONTROLLER_SERVICE_NAME,
-            HEARTBEAT_INTERVAL
+            HEARTBEAT_INTERVAL,
+            DNS_REFRESH_INTERVAL,
+            CONTROLLER_FAILURE_THRESHOLD
         )
         from chunkserver.heartbeat_service import HeartbeatService
+        from chunkserver.controller_discovery import ServiceDiscoveryService
+
+        controller_discovery = ServiceDiscoveryService(
+            service_name=CONTROLLER_SERVICE_NAME,
+            port=8000,
+            refresh_interval=DNS_REFRESH_INTERVAL,
+            failure_threshold=CONTROLLER_FAILURE_THRESHOLD
+        )
 
         heartbeat_service = HeartbeatService(
             node_id=CHUNKSERVER_NODE_ID,
             advertise_addr=CHUNKSERVER_ADVERTISE_ADDR,
             controller_service=CONTROLLER_SERVICE_NAME,
-            interval=HEARTBEAT_INTERVAL
+            interval=HEARTBEAT_INTERVAL,
+            controller_discovery=controller_discovery
         )
         await heartbeat_service.start()
         logger.info(f"Heartbeat service started: node_id={CHUNKSERVER_NODE_ID}, addr={CHUNKSERVER_ADVERTISE_ADDR}")
