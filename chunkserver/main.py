@@ -29,11 +29,39 @@ async def serve(chunk_index: ChunkIndex) -> None:
     logger.info(f"Starting chunkserver on {listen_addr}")
     await server.start()
 
+    heartbeat_service = None
+    try:
+        from chunkserver.distributed_config import (
+            CHUNKSERVER_NODE_ID,
+            CHUNKSERVER_ADVERTISE_ADDR,
+            CONTROLLER_SERVICE_NAME,
+            HEARTBEAT_INTERVAL
+        )
+        from chunkserver.heartbeat_service import HeartbeatService
+
+        heartbeat_service = HeartbeatService(
+            node_id=CHUNKSERVER_NODE_ID,
+            advertise_addr=CHUNKSERVER_ADVERTISE_ADDR,
+            controller_service=CONTROLLER_SERVICE_NAME,
+            interval=HEARTBEAT_INTERVAL
+        )
+        await heartbeat_service.start()
+        logger.info(f"Heartbeat service started: node_id={CHUNKSERVER_NODE_ID}, addr={CHUNKSERVER_ADVERTISE_ADDR}")
+    except ImportError:
+        logger.info("Distributed config not available - running without heartbeat")
+    except Exception as e:
+        logger.error(f"Failed to start heartbeat service: {e}", exc_info=True)
+
     async def shutdown(sig=None):
         if sig:
             logger.info(f"Received signal {sig}, shutting down...")
         else:
             logger.info("Shutting down...")
+
+        if heartbeat_service:
+            await heartbeat_service.stop()
+            logger.info("Heartbeat service stopped")
+
         await server.stop(5)
         chunk_index.save_to_disk()
         logger.info("Chunkserver stopped")

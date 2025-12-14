@@ -25,7 +25,10 @@ def init_database() -> None:
                 password_hash TEXT NOT NULL,
                 api_key TEXT UNIQUE,
                 created_at TEXT NOT NULL,
-                key_updated_at TEXT
+                key_updated_at TEXT,
+                vector_clock TEXT DEFAULT '{}',
+                last_modified_by TEXT,
+                version INTEGER DEFAULT 0
             )
         """)
 
@@ -36,6 +39,10 @@ def init_database() -> None:
                 size INTEGER NOT NULL,
                 owner_id TEXT NOT NULL,
                 created_at TEXT NOT NULL,
+                deleted INTEGER DEFAULT 0,
+                vector_clock TEXT DEFAULT '{}',
+                last_modified_by TEXT,
+                version INTEGER DEFAULT 0,
                 FOREIGN KEY(owner_id) REFERENCES users(user_id)
             )
         """)
@@ -56,8 +63,54 @@ def init_database() -> None:
                 chunk_index INTEGER NOT NULL,
                 size INTEGER NOT NULL,
                 checksum TEXT NOT NULL,
+                vector_clock TEXT DEFAULT '{}',
+                last_modified_by TEXT,
+                version INTEGER DEFAULT 0,
                 UNIQUE(file_id, chunk_index),
                 FOREIGN KEY(file_id) REFERENCES files(file_id) ON DELETE CASCADE
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chunk_locations (
+                chunk_id TEXT NOT NULL,
+                chunkserver_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY(chunk_id, chunkserver_id),
+                FOREIGN KEY(chunk_id) REFERENCES chunks(chunk_id) ON DELETE CASCADE
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chunkserver_nodes (
+                node_id TEXT PRIMARY KEY,
+                address TEXT NOT NULL,
+                last_heartbeat REAL NOT NULL,
+                capacity_bytes INTEGER,
+                used_bytes INTEGER,
+                status TEXT DEFAULT 'active'
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS controller_nodes (
+                node_id TEXT PRIMARY KEY,
+                address TEXT NOT NULL,
+                last_seen REAL NOT NULL,
+                vector_clock TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS gossip_log (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                data TEXT NOT NULL,
+                vector_clock TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                gossiped_to TEXT
             )
         """)
 

@@ -192,3 +192,92 @@ class PingResponse:
         """Deserialize from JSON bytes."""
         obj = json.loads(data)
         return cls(available=obj['available'])
+
+
+@dataclass
+class ChunkInfo:
+    """Information about a chunk stored on a chunkserver."""
+    chunk_id: str
+    file_id: str
+    chunk_index: int
+    size: int
+    checksum: str
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps(self.__dict__).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'ChunkInfo':
+        """Deserialize from JSON bytes."""
+        return cls(**json.loads(data))
+
+
+@dataclass
+class ListChunksRequest:
+    """Request message for ListChunks RPC."""
+    pass
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({}).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'ListChunksRequest':
+        """Deserialize from JSON bytes."""
+        return cls()
+
+
+@dataclass
+class ListChunksResponse:
+    """Response message for ListChunks RPC."""
+    chunks: list
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'chunks': [c.__dict__ for c in self.chunks]
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'ListChunksResponse':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        chunks = [ChunkInfo(**c) for c in obj['chunks']]
+        return cls(chunks=chunks)
+
+
+@dataclass
+class ReplicateChunkRequest:
+    """Request message for ReplicateChunk RPC."""
+    chunk_id: str
+    source_chunkserver_address: str
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps(self.__dict__).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'ReplicateChunkRequest':
+        """Deserialize from JSON bytes."""
+        return cls(**json.loads(data))
+
+
+@dataclass
+class ReplicateChunkResponse:
+    """Response message for ReplicateChunk RPC."""
+    success: bool
+    error: Optional[str] = None
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'success': self.success,
+            'error': self.error
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'ReplicateChunkResponse':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(success=obj['success'], error=obj.get('error'))

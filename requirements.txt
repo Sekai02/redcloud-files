@@ -9,6 +9,9 @@ python-multipart>=0.0.6
 # HTTP client for CLI-controller communication
 httpx>=0.25.0
 
+# HTTP client for controller-controller communication
+aiohttp>=3.9.0
+
 # gRPC for controller-chunkserver communication
 grpcio>=1.59.0
 grpcio-tools>=1.59.0

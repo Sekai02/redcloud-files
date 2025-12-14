@@ -28,6 +28,11 @@ class FileService:
         self.chunk_repo = ChunkRepository()
         self.chunkserver_client = ChunkserverClient()
 
+    def _get_replication_manager(self):
+        """Get replication manager if available (distributed mode)"""
+        from controller.service_locator import get_replication_manager, get_health_monitor
+        return get_replication_manager(), get_health_monitor()
+
     async def upload_file(
         self,
         file_name: str,
@@ -38,28 +43,39 @@ class FileService:
     ) -> FileMetadata:
         if not tags:
             raise EmptyTagListError("At least one tag is required for file upload")
-        
+
         from controller.utils import generate_uuid
-        
+
         file_id = generate_uuid()
         created_at = datetime.utcnow()
-        
+
         chunks_metadata = []
         written_chunk_ids = []
-        
+
+        replication_manager, _ = self._get_replication_manager()
+
         try:
             for chunk_meta, chunk_data in self._split_into_chunks_with_data(file_data, file_id):
-                success = await self.chunkserver_client.write_chunk(
-                    chunk_id=chunk_meta.chunk_id,
-                    file_id=chunk_meta.file_id,
-                    chunk_index=chunk_meta.chunk_index,
-                    data=chunk_data,
-                    checksum=chunk_meta.checksum
-                )
-                
+                if replication_manager:
+                    success = await replication_manager.write_chunk_replicated(
+                        chunk_id=chunk_meta.chunk_id,
+                        file_id=chunk_meta.file_id,
+                        chunk_index=chunk_meta.chunk_index,
+                        data=chunk_data,
+                        checksum=chunk_meta.checksum
+                    )
+                else:
+                    success = await self.chunkserver_client.write_chunk(
+                        chunk_id=chunk_meta.chunk_id,
+                        file_id=chunk_meta.file_id,
+                        chunk_index=chunk_meta.chunk_index,
+                        data=chunk_data,
+                        checksum=chunk_meta.checksum
+                    )
+
                 if not success:
                     raise Exception(f"Failed to write chunk {chunk_meta.chunk_id} to chunkserver")
-                
+
                 written_chunk_ids.append(chunk_meta.chunk_id)
                 chunks_metadata.append(chunk_meta)
                 logger.info(f"Wrote chunk {chunk_meta.chunk_index} for file {file_id}")
@@ -155,22 +171,27 @@ class FileService:
     async def _cleanup_chunks(self, chunk_ids: List[str]) -> List[str]:
         """
         Delete chunks from chunkserver with retry logic.
-        
+
         Args:
             chunk_ids: List of chunk IDs to delete
-            
+
         Returns:
             List of chunk IDs that could not be deleted
         """
         failed_deletions = []
-        
+
+        replication_manager, _ = self._get_replication_manager()
+
         for chunk_id in chunk_ids:
             max_attempts = 3
             deleted = False
-            
+
             for attempt in range(max_attempts):
                 try:
-                    await self.chunkserver_client.delete_chunk(chunk_id)
+                    if replication_manager:
+                        await replication_manager.delete_chunk_from_all_replicas(chunk_id)
+                    else:
+                        await self.chunkserver_client.delete_chunk(chunk_id)
                     logger.info(f"Deleted orphaned chunk {chunk_id}")
                     deleted = True
                     break
@@ -181,13 +202,13 @@ class FileService:
                         await asyncio.sleep(delay)
                     else:
                         logger.error(f"Failed to delete orphaned chunk {chunk_id} after {max_attempts} attempts: {e}")
-            
+
             if not deleted:
                 failed_deletions.append(chunk_id)
-        
+
         if failed_deletions:
             await self._log_orphaned_chunks(failed_deletions)
-        
+
         return failed_deletions
     
     async def _log_orphaned_chunks(self, chunk_ids: List[str]) -> None:
@@ -235,6 +256,8 @@ class FileService:
             logger.warning(f"File {file_id} has no chunks in database")
             raise FileNotFoundError(f"File {file_id} has no data")
 
+        replication_manager, health_monitor = self._get_replication_manager()
+
         async def stream_file_data():
             total_chunks = len(chunks)
             bytes_streamed = 0
@@ -246,13 +269,20 @@ class FileService:
                 logger.info(f"Streaming chunk {chunk_num}/{total_chunks} (chunk_id={chunk.chunk_id})")
 
                 try:
-                    async for piece in self.chunkserver_client.read_chunk(chunk.chunk_id):
-                        bytes_streamed += len(piece)
-                        yield piece
+                    if replication_manager:
+                        chunk_data = await replication_manager.read_chunk_with_fallback(
+                            chunk.chunk_id,
+                            health_monitor=health_monitor
+                        )
+                        bytes_streamed += len(chunk_data)
+                        yield chunk_data
+                    else:
+                        async for piece in self.chunkserver_client.read_chunk(chunk.chunk_id):
+                            bytes_streamed += len(piece)
+                            yield piece
                 except FileNotFoundError:
                     logger.error(
-                        f"Chunk {chunk.chunk_id} (index {chunk.chunk_index}) not found on chunkserver. "
-                        f"Downloaded {bytes_streamed}/{file.size} bytes before failure."
+                        f"Chunk {chunk.chunk_id} (index {chunk.chunk_index}) not found on chunkserver. "                        f"Downloaded {bytes_streamed}/{file.size} bytes before failure."
                     )
                     raise
                 except Exception as e:

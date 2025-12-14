@@ -16,7 +16,12 @@ from common.protocol import (
     PingRequest,
     PingResponse,
     ChunkMetadata,
-    ChunkDataPiece
+    ChunkDataPiece,
+    ListChunksRequest,
+    ListChunksResponse,
+    ChunkInfo,
+    ReplicateChunkRequest,
+    ReplicateChunkResponse
 )
 from common.constants import STREAM_PIECE_SIZE_BYTES
 from chunkserver.chunk_index import ChunkIndex, ChunkIndexEntry
@@ -241,6 +246,114 @@ class ChunkserverServicer:
         response = PingResponse(available=True)
         return response.to_json()
 
+    async def ListChunks(
+        self,
+        request_bytes: bytes,
+        context: grpc.aio.ServicerContext
+    ) -> bytes:
+        """
+        Handle ListChunks RPC (unary).
+        List all chunks stored on this chunkserver.
+
+        Args:
+            request_bytes: Serialized ListChunksRequest
+            context: gRPC context
+
+        Returns:
+            Serialized ListChunksResponse
+        """
+        try:
+            all_chunks = self.chunk_index.list_all()
+            chunk_infos = []
+
+            for chunk_id, entry in all_chunks.items():
+                chunk_infos.append(ChunkInfo(
+                    chunk_id=chunk_id,
+                    file_id=entry.file_id,
+                    chunk_index=entry.chunk_index,
+                    size=entry.size,
+                    checksum=entry.checksum
+                ))
+
+            response = ListChunksResponse(chunks=chunk_infos)
+            return response.to_json()
+
+        except Exception as e:
+            logger.error(f"Failed to list chunks: {e}", exc_info=True)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            response = ListChunksResponse(chunks=[])
+            return response.to_json()
+
+    async def ReplicateChunk(
+        self,
+        request_bytes: bytes,
+        context: grpc.aio.ServicerContext
+    ) -> bytes:
+        """
+        Handle ReplicateChunk RPC (unary).
+        Replicate a chunk from another chunkserver.
+
+        Args:
+            request_bytes: Serialized ReplicateChunkRequest
+            context: gRPC context
+
+        Returns:
+            Serialized ReplicateChunkResponse
+        """
+        request = ReplicateChunkRequest.from_json(request_bytes)
+        chunk_id = request.chunk_id
+        source_address = request.source_chunkserver_address
+
+        try:
+            async with grpc.aio.insecure_channel(source_address) as channel:
+                read_request = ReadChunkRequest(chunk_id=chunk_id)
+
+                response_stream = channel.unary_stream(
+                    f'/chunkserver.ChunkserverService/ReadChunk',
+                    request_serializer=lambda x: x,
+                    response_deserializer=lambda x: x
+                )(read_request.to_json())
+
+                metadata = None
+                chunk_data = bytearray()
+
+                async for response_bytes in response_stream:
+                    response = ReadChunkResponse.from_json(response_bytes)
+
+                    if response.metadata:
+                        metadata = response.metadata
+
+                    if response.data:
+                        chunk_data.extend(response.data.data)
+
+                if metadata is None:
+                    raise Exception(f"No metadata received for chunk {chunk_id}")
+
+                write_chunk(
+                    chunk_id=chunk_id,
+                    data=bytes(chunk_data),
+                    file_id=metadata.file_id,
+                    chunk_index=metadata.chunk_index
+                )
+
+                self.chunk_index.add(
+                    chunk_id=chunk_id,
+                    file_id=metadata.file_id,
+                    chunk_index=metadata.chunk_index,
+                    size=metadata.total_size,
+                    checksum=metadata.checksum
+                )
+
+                logger.info(f"Successfully replicated chunk {chunk_id} from {source_address}")
+                response = ReplicateChunkResponse(success=True)
+                return response.to_json()
+
+        except Exception as e:
+            logger.error(f"Failed to replicate chunk {chunk_id} from {source_address}: {e}", exc_info=True)
+            response = ReplicateChunkResponse(success=False, error=str(e))
+            return response.to_json()
+
 
 def create_server(chunk_index: ChunkIndex) -> aio.Server:
     """
@@ -276,6 +389,16 @@ def create_server(chunk_index: ChunkIndex) -> aio.Server:
                 ),
                 'Ping': grpc.unary_unary_rpc_method_handler(
                     servicer.Ping,
+                    request_deserializer=lambda x: x,
+                    response_serializer=lambda x: x,
+                ),
+                'ListChunks': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListChunks,
+                    request_deserializer=lambda x: x,
+                    response_serializer=lambda x: x,
+                ),
+                'ReplicateChunk': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReplicateChunk,
                     request_deserializer=lambda x: x,
                     response_serializer=lambda x: x,
                 ),
