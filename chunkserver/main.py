@@ -37,10 +37,15 @@ async def serve(chunk_index: ChunkIndex) -> None:
             CONTROLLER_SERVICE_NAME,
             HEARTBEAT_INTERVAL,
             DNS_REFRESH_INTERVAL,
-            CONTROLLER_FAILURE_THRESHOLD
+            CONTROLLER_FAILURE_THRESHOLD,
+            get_container_ip
         )
         from chunkserver.heartbeat_service import HeartbeatService
         from chunkserver.controller_discovery import ServiceDiscoveryService
+
+        detected_ip = get_container_ip()
+        logger.info(f"Detected container IP: {detected_ip}")
+        logger.info(f"Advertise address: {CHUNKSERVER_ADVERTISE_ADDR}")
 
         controller_discovery = ServiceDiscoveryService(
             service_name=CONTROLLER_SERVICE_NAME,

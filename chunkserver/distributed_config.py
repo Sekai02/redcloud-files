@@ -9,8 +9,18 @@ def get_container_ip():
     """
     Get chunkserver's IP address on Docker network.
 
-    Uses routing table approach to find the correct interface IP.
+    Uses Docker DNS resolution to find overlay network IP.
+    Falls back to routing table approach for non-Docker environments.
     """
+    try:
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+
+        if ip and not ip.startswith('127.'):
+            return ip
+    except Exception:
+        pass
+
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(('8.8.8.8', 80))

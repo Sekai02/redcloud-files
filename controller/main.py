@@ -102,7 +102,8 @@ async def startup_event():
             HEARTBEAT_TIMEOUT,
             REPAIR_INTERVAL,
             MIN_CHUNK_REPLICAS,
-            PEER_DNS_REFRESH_INTERVAL
+            PEER_DNS_REFRESH_INTERVAL,
+            get_container_ip
         )
         from controller.gossip.peer_registry import PeerRegistry
         from controller.gossip.gossip_service import GossipService
@@ -118,6 +119,8 @@ async def startup_event():
             set_health_monitor
         )
 
+        detected_ip = get_container_ip()
+        logger.info(f"Detected container IP: {detected_ip}")
         logger.info(f"Starting distributed controller: node_id={CONTROLLER_NODE_ID}, addr={CONTROLLER_ADVERTISE_ADDR}")
 
         peer_registry = PeerRegistry(
