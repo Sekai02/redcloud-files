@@ -101,7 +101,9 @@ async def startup_event():
             GOSSIP_FANOUT,
             HEARTBEAT_TIMEOUT,
             REPAIR_INTERVAL,
-            MIN_CHUNK_REPLICAS
+            MIN_CHUNK_REPLICAS,
+            PEER_DNS_REFRESH_INTERVAL,
+            get_container_ip
         )
         from controller.gossip.peer_registry import PeerRegistry
         from controller.gossip.gossip_service import GossipService
@@ -117,6 +119,8 @@ async def startup_event():
             set_health_monitor
         )
 
+        detected_ip = get_container_ip()
+        logger.info(f"Detected container IP: {detected_ip}")
         logger.info(f"Starting distributed controller: node_id={CONTROLLER_NODE_ID}, addr={CONTROLLER_ADVERTISE_ADDR}")
 
         peer_registry = PeerRegistry(
@@ -163,6 +167,7 @@ async def startup_event():
 
         await peer_registry.discover_initial_peers()
         await peer_registry.register_with_peers()
+        await peer_registry.start_periodic_refresh(PEER_DNS_REFRESH_INTERVAL)
 
         await gossip_service.start()
         await health_monitor.start()
@@ -186,6 +191,10 @@ async def shutdown_event():
     Cleanup resources on application shutdown.
     """
     logger.info("Controller service shutting down...")
+
+    if peer_registry:
+        await peer_registry.stop_periodic_refresh()
+        logger.info("Peer refresh stopped")
 
     if gossip_service:
         await gossip_service.stop()

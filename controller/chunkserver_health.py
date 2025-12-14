@@ -15,11 +15,11 @@ class ChunkserverHealthMonitor:
     Marks chunkservers as failed if they miss heartbeats.
     """
 
-    def __init__(self, chunkserver_registry: ChunkserverRegistry, heartbeat_timeout: int = 30):
+    def __init__(self, chunkserver_registry: ChunkserverRegistry, heartbeat_timeout: int = 60):
         """
         Args:
             chunkserver_registry: Registry storing chunkserver info
-            heartbeat_timeout: Seconds without heartbeat before marking failed (default: 30)
+            heartbeat_timeout: Seconds without heartbeat before marking failed (default: 60)
         """
         self.chunkserver_registry = chunkserver_registry
         self.heartbeat_timeout = heartbeat_timeout

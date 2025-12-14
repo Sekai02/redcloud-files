@@ -2,8 +2,9 @@
 
 import asyncio
 import aiohttp
+import socket
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from common.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -18,46 +19,88 @@ class PeerRegistry:
         self.service_name = service_name
         self.peers: Dict[str, Dict[str, Any]] = {}
         self.lock = asyncio.Lock()
+        self.my_ip = advertise_addr.split(":")[0]
+        self.running = False
 
     async def discover_initial_peers(self):
         """
-        Bootstrap by querying 'controller' DNS multiple times.
-        DNS round-robin may return different IPs each time.
+        Bootstrap by resolving service DNS to all controller IPs.
+        Queries each discovered controller for its real node_id.
         """
-        discovered = set()
+        try:
+            loop = asyncio.get_event_loop()
+            addr_info = await loop.run_in_executor(
+                None,
+                socket.getaddrinfo,
+                self.service_name,
+                8000,
+                socket.AF_INET,
+                socket.SOCK_STREAM
+            )
 
-        for attempt in range(10):
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        f"http://{self.service_name}:8000/internal/peers",
-                        timeout=aiohttp.ClientTimeout(total=5)
-                    ) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            for peer in data.get("peers", []):
-                                peer_node_id = peer["node_id"]
-                                peer_address = peer["address"]
-                                if peer_node_id != self.node_id:
-                                    discovered.add((peer_node_id, peer_address))
-                            
-                            self_info = data.get("self")
-                            if self_info and self_info["node_id"] != self.node_id:
-                                discovered.add((self_info["node_id"], self_info["address"]))
-            except Exception as e:
-                logger.debug(f"Discovery attempt {attempt} failed: {e}")
-                pass
+            discovered_ips = set()
+            for family, socktype, proto, canonname, sockaddr in addr_info:
+                ip, port = sockaddr
+                if ip != self.my_ip:
+                    discovered_ips.add(ip)
 
-            await asyncio.sleep(0.5)
+            if not discovered_ips:
+                logger.info("No peers discovered via DNS - might be first controller")
+                return
 
-        async with self.lock:
-            for node_id, address in discovered:
-                self.peers[node_id] = {"address": address, "last_seen": time.time()}
+            tasks = [
+                self._query_peer_identity(ip)
+                for ip in discovered_ips
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        if discovered:
-            logger.info(f"Discovered {len(discovered)} initial peers: {[nid for nid, _ in discovered]}")
-        else:
-            logger.info("No initial peers discovered - might be first controller")
+            async with self.lock:
+                for result in results:
+                    if isinstance(result, dict) and result.get('node_id') and result.get('address'):
+                        node_id = result['node_id']
+                        address = result['address']
+
+                        if node_id != self.node_id:
+                            self.peers[node_id] = {"address": address, "last_seen": time.time()}
+
+            successful = sum(1 for r in results if isinstance(r, dict) and r.get('node_id'))
+            logger.info(f"Discovered {successful}/{len(discovered_ips)} peers via DNS")
+
+        except Exception as e:
+            logger.warning(f"DNS-based peer discovery failed: {e}")
+
+    async def _query_peer_identity(self, ip: str) -> Dict[str, str]:
+        """
+        Query a controller's /internal/peers endpoint to get its real node_id.
+
+        Args:
+            ip: Controller IP address
+
+        Returns:
+            Dict with node_id and address
+
+        Raises:
+            Exception: If query fails or returns invalid data
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"http://{ip}:8000/internal/peers",
+                    timeout=aiohttp.ClientTimeout(total=3)
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        self_info = data.get("self")
+                        if self_info and self_info.get("node_id"):
+                            logger.debug(f"Retrieved identity from {ip}: {self_info['node_id']}")
+                            return {
+                                "node_id": self_info["node_id"],
+                                "address": self_info["address"]
+                            }
+                    raise Exception(f"Invalid response from {ip}: status={resp.status}")
+        except Exception as e:
+            logger.debug(f"Failed to query peer identity from {ip}: {e}")
+            raise
 
     async def register_with_peers(self):
         """Register ourselves with discovered peers"""
@@ -79,6 +122,32 @@ class PeerRegistry:
                             logger.info(f"Registered with peer {peer['address']}")
             except Exception as e:
                 logger.warning(f"Failed to register with peer {peer['address']}: {e}")
+
+    async def start_periodic_refresh(self, interval: int = 30):
+        """
+        Start periodic DNS refresh to discover new peers.
+
+        Args:
+            interval: Seconds between DNS refreshes
+        """
+        self.running = True
+        asyncio.create_task(self._refresh_loop(interval))
+        logger.info(f"Peer DNS refresh started (interval={interval}s)")
+
+    async def stop_periodic_refresh(self):
+        """Stop periodic DNS refresh"""
+        self.running = False
+        logger.info("Peer DNS refresh stopped")
+
+    async def _refresh_loop(self, interval: int):
+        """Periodically refresh peer list via DNS"""
+        while self.running:
+            try:
+                await asyncio.sleep(interval)
+                await self.discover_initial_peers()
+            except Exception as e:
+                logger.error(f"Peer refresh error: {e}", exc_info=True)
+                await asyncio.sleep(5)
 
     def get_all_peers(self) -> List[Dict[str, str]]:
         """Get list of all known peers"""
