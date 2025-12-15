@@ -6,7 +6,6 @@ from common.logging_config import get_logger
 from controller.chunk_placement import ChunkPlacementManager
 from controller.chunkserver_registry import ChunkserverRegistry
 from controller.chunkserver_client import ChunkserverClient
-from controller.database import get_db_connection
 
 logger = get_logger(__name__)
 
@@ -41,7 +40,7 @@ class ReplicationManager:
         data: bytes,
         checksum: str,
         max_retries: int = 3
-    ) -> bool:
+    ) -> List[str]:
         """
         Write chunk to N chunkservers in parallel with retry logic.
 
@@ -58,7 +57,9 @@ class ReplicationManager:
             max_retries: Maximum number of retry attempts (default: 3)
 
         Returns:
-            True if at least one write succeeds
+            List of chunkserver IDs where chunk was successfully written.
+            Caller is responsible for recording chunk_locations after
+            chunk metadata is committed to database.
 
         Raises:
             Exception: If all retries fail to write to any chunkserver
@@ -111,20 +112,18 @@ class ReplicationManager:
                 results = await asyncio.gather(*write_tasks, return_exceptions=True)
 
                 successful_servers = []
-                with get_db_connection() as conn:
-                    for server_id, result in zip(target_servers, results):
-                        if result is True:
-                            successful_servers.append(server_id)
-                            await self.placement.record_chunk_location(chunk_id, server_id, conn)
-                            logger.debug(f"Successfully wrote chunk {chunk_id} to {server_id}")
-                        else:
-                            logger.warning(f"Failed to write chunk {chunk_id} to {server_id}: {result}")
+                for server_id, result in zip(target_servers, results):
+                    if result is True:
+                        successful_servers.append(server_id)
+                        logger.debug(f"Successfully wrote chunk {chunk_id} to {server_id}")
+                    else:
+                        logger.warning(f"Failed to write chunk {chunk_id} to {server_id}: {result}")
 
                 if successful_servers:
                     logger.info(
                         f"Chunk {chunk_id} written to {len(successful_servers)}/{len(target_servers)} servers"
                     )
-                    return True
+                    return successful_servers
 
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt

@@ -51,19 +51,23 @@ class FileService:
 
         chunks_metadata = []
         written_chunk_ids = []
+        chunk_locations = {}
 
         replication_manager, _ = self._get_replication_manager()
 
         try:
             for chunk_meta, chunk_data in self._split_into_chunks_with_data(file_data, file_id):
                 if replication_manager:
-                    success = await replication_manager.write_chunk_replicated(
+                    successful_servers = await replication_manager.write_chunk_replicated(
                         chunk_id=chunk_meta.chunk_id,
                         file_id=chunk_meta.file_id,
                         chunk_index=chunk_meta.chunk_index,
                         data=chunk_data,
                         checksum=chunk_meta.checksum
                     )
+                    if not successful_servers:
+                        raise Exception(f"Failed to write chunk {chunk_meta.chunk_id} to chunkserver")
+                    chunk_locations[chunk_meta.chunk_id] = successful_servers
                 else:
                     success = await self.chunkserver_client.write_chunk(
                         chunk_id=chunk_meta.chunk_id,
@@ -72,9 +76,8 @@ class FileService:
                         data=chunk_data,
                         checksum=chunk_meta.checksum
                     )
-
-                if not success:
-                    raise Exception(f"Failed to write chunk {chunk_meta.chunk_id} to chunkserver")
+                    if not success:
+                        raise Exception(f"Failed to write chunk {chunk_meta.chunk_id} to chunkserver")
 
                 written_chunk_ids.append(chunk_meta.chunk_id)
                 chunks_metadata.append(chunk_meta)
@@ -114,6 +117,15 @@ class FileService:
                         chunks_metadata,
                         conn=conn
                     )
+                    
+                    if chunk_locations:
+                        cursor = conn.cursor()
+                        for chunk_id, server_ids in chunk_locations.items():
+                            for server_id in server_ids:
+                                cursor.execute(
+                                    "INSERT OR IGNORE INTO chunk_locations (chunk_id, chunkserver_id, created_at) VALUES (?, ?, ?)",
+                                    (chunk_id, server_id, datetime.utcnow().timestamp())
+                                )
                     
                     conn.commit()
                     logger.info(f"Successfully uploaded file {file_id} with {len(chunks_metadata)} chunks")
