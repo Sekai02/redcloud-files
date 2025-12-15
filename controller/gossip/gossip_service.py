@@ -47,6 +47,7 @@ class GossipService:
         asyncio.create_task(self._gossip_loop())
         asyncio.create_task(self._anti_entropy_loop())
         asyncio.create_task(self._consistency_check_loop())
+        asyncio.create_task(self._prune_loop())
         logger.info("Gossip service started")
 
     async def stop(self):
@@ -58,19 +59,19 @@ class GossipService:
         """Push-based gossip: send updates to random peers"""
         while self.running:
             try:
-                updates = await self._get_pending_updates()
-
-                if updates:
-                    peers = self.peer_registry.get_random_peers(self.fanout)
-                    for peer in peers:
-                        try:
+                peers = self.peer_registry.get_random_peers(self.fanout)
+                
+                for peer in peers:
+                    try:
+                        updates = await self._get_pending_updates_for_peer(peer["node_id"])
+                        if updates:
                             await self._send_updates_to_peer(peer["address"], updates)
                             await self._mark_updates_gossiped(
                                 [u["log_id"] for u in updates],
                                 peer["node_id"]
                             )
-                        except Exception as e:
-                            logger.warning(f"Failed to gossip to {peer['address']}: {e}")
+                    except Exception as e:
+                        logger.warning(f"Failed to gossip to {peer['address']}: {e}")
 
                 await asyncio.sleep(self.gossip_interval)
             except Exception as e:
@@ -103,6 +104,35 @@ class GossipService:
             except Exception as e:
                 logger.error(f"Anti-entropy error: {e}", exc_info=True)
                 await asyncio.sleep(5)
+
+    async def _get_pending_updates_for_peer(self, peer_node_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get updates that haven't been sent to a specific peer"""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT log_id, entity_type, entity_id, operation, data, vector_clock, timestamp, gossiped_to
+                FROM gossip_log
+                ORDER BY log_id DESC
+                LIMIT ?
+            """, (limit,))
+
+            rows = cursor.fetchall()
+            updates = []
+            for row in rows:
+                gossiped_to = json.loads(row["gossiped_to"]) if row["gossiped_to"] else []
+                if peer_node_id not in gossiped_to:
+                    updates.append({
+                        "log_id": row["log_id"],
+                        "entity_type": row["entity_type"],
+                        "entity_id": row["entity_id"],
+                        "operation": row["operation"],
+                        "data": json.loads(row["data"]),
+                        "vector_clock": json.loads(row["vector_clock"]),
+                        "timestamp": row["timestamp"],
+                        "gossiped_to": gossiped_to
+                    })
+
+            return updates
 
     async def _get_pending_updates(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get updates that haven't been fully propagated"""
@@ -148,20 +178,21 @@ class GossipService:
                     raise Exception(f"Peer returned status {resp.status}")
 
     async def _mark_updates_gossiped(self, log_ids: List[int], peer_node_id: str):
-        """Mark updates as gossiped to a specific peer"""
+        """Mark updates as gossiped to a specific peer using atomic update"""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             for log_id in log_ids:
-                cursor.execute("SELECT gossiped_to FROM gossip_log WHERE log_id = ?", (log_id,))
-                row = cursor.fetchone()
-                if row:
-                    gossiped_to = json.loads(row["gossiped_to"]) if row["gossiped_to"] else []
-                    if peer_node_id not in gossiped_to:
-                        gossiped_to.append(peer_node_id)
-                        cursor.execute(
-                            "UPDATE gossip_log SET gossiped_to = ? WHERE log_id = ?",
-                            (json.dumps(gossiped_to), log_id)
-                        )
+                cursor.execute("""
+                    UPDATE gossip_log 
+                    SET gossiped_to = CASE
+                        WHEN gossiped_to IS NULL OR gossiped_to = '' OR gossiped_to = '[]'
+                        THEN json_array(?)
+                        WHEN NOT instr(gossiped_to, ?) > 0
+                        THEN json_insert(gossiped_to, '$[#]', ?)
+                        ELSE gossiped_to
+                    END
+                    WHERE log_id = ?
+                """, (peer_node_id, '"' + peer_node_id + '"', peer_node_id, log_id))
             conn.commit()
 
     async def _sync_with_peer(self, peer_address: str):
@@ -172,8 +203,134 @@ class GossipService:
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
                 if resp.status == 200:
-                    peer_summary = await resp.json()
-                    logger.debug(f"Synced state summary from {peer_address}")
+                    peer_data = await resp.json()
+                    peer_summary = peer_data.get("summary", {})
+                    
+                    await self._pull_missing_entities(session, peer_address, peer_summary)
+                    await self._push_local_entities(session, peer_address, peer_summary)
+                    
+                    logger.debug(f"Completed anti-entropy sync with {peer_address}")
+
+    async def _pull_missing_entities(self, session: aiohttp.ClientSession, peer_address: str, peer_summary: Dict[str, Any]):
+        """Pull entities that peer has but we don't or peer has newer version"""
+        for entity_type in ['files', 'users', 'chunks']:
+            peer_entities = peer_summary.get(entity_type, {})
+            
+            for entity_id, peer_info in peer_entities.items():
+                local_entity = await self._fetch_local_entity(
+                    entity_type.rstrip('s'),
+                    entity_id
+                )
+                
+                should_pull = False
+                if local_entity is None:
+                    should_pull = True
+                else:
+                    local_version = local_entity.get('version', 0)
+                    peer_version = peer_info.get('version', 0)
+                    if peer_version > local_version:
+                        should_pull = True
+                    elif peer_version == local_version:
+                        local_vc = VectorClock.from_json(local_entity.get('vector_clock', '{}'))
+                        peer_vc = VectorClock.from_json(peer_info.get('vector_clock', '{}'))
+                        comparison = local_vc.compare(peer_vc)
+                        if comparison == 'before':
+                            should_pull = True
+                
+                if should_pull:
+                    try:
+                        async with session.get(
+                            f"http://{peer_address}/internal/gossip/entity/{entity_type.rstrip('s')}/{entity_id}",
+                            timeout=aiohttp.ClientTimeout(total=10)
+                        ) as entity_resp:
+                            if entity_resp.status == 200:
+                                entity_data = await entity_resp.json()
+                                if entity_data.get("status") == "ok" and entity_data.get("entity"):
+                                    await self._store_entity(entity_type.rstrip('s'), entity_data["entity"])
+                                    logger.debug(f"Pulled {entity_type.rstrip('s')}:{entity_id} from {peer_address}")
+                    except Exception as e:
+                        logger.warning(f"Failed to pull {entity_type}:{entity_id} from {peer_address}: {e}")
+
+    async def _push_local_entities(self, session: aiohttp.ClientSession, peer_address: str, peer_summary: Dict[str, Any]):
+        """Push entities that we have but peer doesn't or we have newer version"""
+        local_summary = await self._get_local_summary()
+        
+        updates_to_push = []
+        
+        for entity_type in ['files', 'users', 'chunks']:
+            local_entities = local_summary.get(entity_type, {})
+            peer_entities = peer_summary.get(entity_type, {})
+            
+            for entity_id, local_info in local_entities.items():
+                should_push = False
+                
+                if entity_id not in peer_entities:
+                    should_push = True
+                else:
+                    peer_info = peer_entities[entity_id]
+                    local_version = local_info.get('version', 0)
+                    peer_version = peer_info.get('version', 0)
+                    if local_version > peer_version:
+                        should_push = True
+                    elif local_version == peer_version:
+                        local_vc = VectorClock.from_json(local_info.get('vector_clock', '{}'))
+                        peer_vc = VectorClock.from_json(peer_info.get('vector_clock', '{}'))
+                        comparison = local_vc.compare(peer_vc)
+                        if comparison == 'after':
+                            should_push = True
+                
+                if should_push:
+                    local_entity = await self._fetch_local_entity(entity_type.rstrip('s'), entity_id)
+                    if local_entity:
+                        updates_to_push.append({
+                            'entity_type': entity_type.rstrip('s'),
+                            'entity_id': entity_id,
+                            'operation': 'sync',
+                            'data': local_entity,
+                            'vector_clock': local_entity.get('vector_clock', {}),
+                            'timestamp': time.time()
+                        })
+        
+        if updates_to_push:
+            try:
+                await self._send_updates_to_peer(peer_address, updates_to_push)
+                logger.debug(f"Pushed {len(updates_to_push)} entities to {peer_address}")
+            except Exception as e:
+                logger.warning(f"Failed to push entities to {peer_address}: {e}")
+
+    async def _get_local_summary(self) -> Dict[str, Dict[str, Any]]:
+        """Get summary of local entities for anti-entropy comparison"""
+        summary = {
+            'files': {},
+            'users': {},
+            'chunks': {}
+        }
+        
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT file_id, vector_clock, version FROM files WHERE deleted = 0")
+            for row in cursor.fetchall():
+                summary['files'][row['file_id']] = {
+                    'vector_clock': row['vector_clock'] or '{}',
+                    'version': row['version'] or 0
+                }
+            
+            cursor.execute("SELECT user_id, vector_clock, version FROM users")
+            for row in cursor.fetchall():
+                summary['users'][row['user_id']] = {
+                    'vector_clock': row['vector_clock'] or '{}',
+                    'version': row['version'] or 0
+                }
+            
+            cursor.execute("SELECT chunk_id, vector_clock, version FROM chunks")
+            for row in cursor.fetchall():
+                summary['chunks'][row['chunk_id']] = {
+                    'vector_clock': row['vector_clock'] or '{}',
+                    'version': row['version'] or 0
+                }
+        
+        return summary
 
     async def receive_gossip(self, sender_node_id: str, updates: List[Dict[str, Any]]):
         """
@@ -228,6 +385,47 @@ class GossipService:
 
             if entity_type == 'file':
                 cursor.execute("SELECT * FROM files WHERE file_id = ?", (entity_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                from controller.repositories.tag_repository import TagRepository
+                from controller.repositories.chunk_repository import ChunkRepository
+                
+                tags = TagRepository.get_tags_for_file(entity_id)
+                chunks = ChunkRepository.get_chunks_by_file(entity_id)
+                
+                chunk_locations = {}
+                for chunk in chunks:
+                    cursor.execute(
+                        "SELECT chunkserver_id FROM chunk_locations WHERE chunk_id = ?",
+                        (chunk.chunk_id,)
+                    )
+                    loc_rows = cursor.fetchall()
+                    chunk_locations[chunk.chunk_id] = [r["chunkserver_id"] for r in loc_rows]
+                
+                return {
+                    'file_id': row['file_id'],
+                    'name': row['name'],
+                    'size': row['size'],
+                    'owner_id': row['owner_id'],
+                    'created_at': row['created_at'],
+                    'deleted': row['deleted'],
+                    'tags': tags,
+                    'chunks': [
+                        {
+                            'chunk_id': c.chunk_id,
+                            'chunk_index': c.chunk_index,
+                            'size': c.size,
+                            'checksum': c.checksum
+                        }
+                        for c in chunks
+                    ],
+                    'chunk_locations': chunk_locations,
+                    'vector_clock': row['vector_clock'] or '{}',
+                    'last_modified_by': row['last_modified_by'],
+                    'version': row['version'] or 0
+                }
             elif entity_type == 'user':
                 cursor.execute("SELECT * FROM users WHERE user_id = ?", (entity_id,))
             elif entity_type == 'chunk':
@@ -382,3 +580,49 @@ class GossipService:
                 logger.info(f"Auto-repaired: added {node_id} from database to memory")
         else:
             logger.debug("Peer consistency check passed")
+
+    async def prune_gossip_log(self, max_age_hours: int = 24, max_entries: int = 10000):
+        """
+        Prune old gossip log entries to prevent unbounded growth.
+        Removes entries that are either:
+        - Older than max_age_hours
+        - Beyond max_entries limit (keeps newest)
+        """
+        cutoff_time = time.time() - (max_age_hours * 3600)
+        
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "DELETE FROM gossip_log WHERE timestamp < ?",
+                (cutoff_time,)
+            )
+            age_deleted = cursor.rowcount
+            
+            cursor.execute("SELECT COUNT(*) FROM gossip_log")
+            total_count = cursor.fetchone()[0]
+            
+            if total_count > max_entries:
+                excess = total_count - max_entries
+                cursor.execute("""
+                    DELETE FROM gossip_log WHERE log_id IN (
+                        SELECT log_id FROM gossip_log ORDER BY log_id ASC LIMIT ?
+                    )
+                """, (excess,))
+                count_deleted = cursor.rowcount
+            else:
+                count_deleted = 0
+            
+            conn.commit()
+            
+            if age_deleted > 0 or count_deleted > 0:
+                logger.info(f"Pruned gossip log: {age_deleted} old entries, {count_deleted} excess entries")
+
+    async def _prune_loop(self):
+        """Periodically prune the gossip log"""
+        while self.running:
+            try:
+                await asyncio.sleep(3600)
+                await self.prune_gossip_log()
+            except Exception as e:
+                logger.error(f"Gossip log prune error: {e}", exc_info=True)

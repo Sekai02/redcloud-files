@@ -135,6 +135,7 @@ class TagService:
             from controller.routes.internal_routes import _gossip_service
             from controller.distributed_config import CONTROLLER_NODE_ID
             from controller.repositories.chunk_repository import ChunkRepository
+            from controller.database import get_db_connection
 
             if _gossip_service is None:
                 return
@@ -145,6 +146,30 @@ class TagService:
 
             tags = self.tag_repo.get_tags_for_file(file_id)
             chunks = ChunkRepository.get_chunks_by_file(file_id)
+
+            vector_clock = '{}'
+            version = 1
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT vector_clock, version FROM files WHERE file_id = ?",
+                    (file_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    vector_clock = row["vector_clock"] if row["vector_clock"] else '{}'
+                    version = row["version"] if row["version"] else 1
+
+            chunk_locations = {}
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                for chunk in chunks:
+                    cursor.execute(
+                        "SELECT chunkserver_id FROM chunk_locations WHERE chunk_id = ?",
+                        (chunk.chunk_id,)
+                    )
+                    rows = cursor.fetchall()
+                    chunk_locations[chunk.chunk_id] = [row["chunkserver_id"] for row in rows]
 
             file_data = {
                 'file_id': file_id,
@@ -163,9 +188,10 @@ class TagService:
                     }
                     for chunk in chunks
                 ],
-                'vector_clock': '{}',
+                'chunk_locations': chunk_locations,
+                'vector_clock': vector_clock,
                 'last_modified_by': CONTROLLER_NODE_ID,
-                'version': 1
+                'version': version
             }
 
             await _gossip_service.add_to_gossip_log(

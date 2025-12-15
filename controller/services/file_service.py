@@ -51,19 +51,23 @@ class FileService:
 
         chunks_metadata = []
         written_chunk_ids = []
+        chunk_locations = {}
 
         replication_manager, _ = self._get_replication_manager()
 
         try:
             for chunk_meta, chunk_data in self._split_into_chunks_with_data(file_data, file_id):
                 if replication_manager:
-                    success = await replication_manager.write_chunk_replicated(
+                    successful_servers = await replication_manager.write_chunk_replicated(
                         chunk_id=chunk_meta.chunk_id,
                         file_id=chunk_meta.file_id,
                         chunk_index=chunk_meta.chunk_index,
                         data=chunk_data,
                         checksum=chunk_meta.checksum
                     )
+                    if not successful_servers:
+                        raise Exception(f"Failed to write chunk {chunk_meta.chunk_id} to chunkserver")
+                    chunk_locations[chunk_meta.chunk_id] = successful_servers
                 else:
                     success = await self.chunkserver_client.write_chunk(
                         chunk_id=chunk_meta.chunk_id,
@@ -72,9 +76,8 @@ class FileService:
                         data=chunk_data,
                         checksum=chunk_meta.checksum
                     )
-
-                if not success:
-                    raise Exception(f"Failed to write chunk {chunk_meta.chunk_id} to chunkserver")
+                    if not success:
+                        raise Exception(f"Failed to write chunk {chunk_meta.chunk_id} to chunkserver")
 
                 written_chunk_ids.append(chunk_meta.chunk_id)
                 chunks_metadata.append(chunk_meta)
@@ -114,6 +117,15 @@ class FileService:
                         chunks_metadata,
                         conn=conn
                     )
+                    
+                    if chunk_locations:
+                        cursor = conn.cursor()
+                        for chunk_id, server_ids in chunk_locations.items():
+                            for server_id in server_ids:
+                                cursor.execute(
+                                    "INSERT OR IGNORE INTO chunk_locations (chunk_id, chunkserver_id, created_at) VALUES (?, ?, ?)",
+                                    (chunk_id, server_id, datetime.utcnow().timestamp())
+                                )
                     
                     conn.commit()
                     logger.info(f"Successfully uploaded file {file_id} with {len(chunks_metadata)} chunks")
@@ -445,10 +457,35 @@ class FileService:
         try:
             from controller.routes.internal_routes import _gossip_service
             from controller.distributed_config import CONTROLLER_NODE_ID
+            from controller.database import get_db_connection
 
             if _gossip_service is None:
                 logger.debug("Gossip service not available, skipping replication")
                 return
+
+            vector_clock = '{}'
+            version = 1
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT vector_clock, version FROM files WHERE file_id = ?",
+                    (file_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    vector_clock = row["vector_clock"] if row["vector_clock"] else '{}'
+                    version = row["version"] if row["version"] else 1
+
+            chunk_locations = {}
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                for chunk in chunks:
+                    cursor.execute(
+                        "SELECT chunkserver_id FROM chunk_locations WHERE chunk_id = ?",
+                        (chunk.chunk_id,)
+                    )
+                    rows = cursor.fetchall()
+                    chunk_locations[chunk.chunk_id] = [row["chunkserver_id"] for row in rows]
 
             file_data = {
                 'file_id': file_id,
@@ -467,9 +504,10 @@ class FileService:
                     }
                     for chunk in chunks
                 ],
-                'vector_clock': '{}',
+                'chunk_locations': chunk_locations,
+                'vector_clock': vector_clock,
                 'last_modified_by': CONTROLLER_NODE_ID,
-                'version': 1
+                'version': version
             }
 
             await _gossip_service.add_to_gossip_log(

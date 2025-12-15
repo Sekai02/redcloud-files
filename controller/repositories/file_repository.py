@@ -204,7 +204,7 @@ class FileRepository:
     def merge_file(file_data: Dict[str, Any], conn=None) -> File:
         """
         Merge remote file with local version using vector clock conflict resolution.
-        Handles file metadata, tags, and chunks atomically.
+        Handles file metadata, tags, chunks, and chunk_locations atomically.
         """
         should_close = conn is None
         if conn is None:
@@ -262,6 +262,16 @@ class FileRepository:
 
             from controller.repositories.chunk_repository import ChunkRepository
             ChunkRepository.merge_chunks(file_data['file_id'], file_data.get('chunks', []), conn=conn)
+
+            chunk_locations = file_data.get('chunk_locations', {})
+            if chunk_locations:
+                import time
+                for chunk_id, server_ids in chunk_locations.items():
+                    for server_id in server_ids:
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO chunk_locations (chunk_id, chunkserver_id, created_at)
+                            VALUES (?, ?, ?)
+                        """, (chunk_id, server_id, time.time()))
 
             if should_close:
                 conn.commit()
