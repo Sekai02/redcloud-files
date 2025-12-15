@@ -104,10 +104,10 @@ class TagRepository:
     def query_files_by_tags(tags: List[str], owner_id: str) -> List[str]:
         if not tags:
             return []
-        
+
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            
+
             placeholders = ','.join('?' for _ in tags)
             query = f"""
                 SELECT DISTINCT t.file_id
@@ -118,7 +118,27 @@ class TagRepository:
                 GROUP BY t.file_id
                 HAVING COUNT(DISTINCT t.tag) = ?
             """
-            
+
             cursor.execute(query, [owner_id] + tags + [len(tags)])
             rows = cursor.fetchall()
             return [row["file_id"] for row in rows]
+
+    @staticmethod
+    def replace_tags(file_id: str, tags: List[str], conn=None) -> None:
+        """
+        Replace all tags for a file atomically (used during merge).
+        """
+        should_close = conn is None
+        if conn is None:
+            conn = get_db_connection().__enter__()
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tags WHERE file_id = ?", (file_id,))
+            for tag in tags:
+                cursor.execute("INSERT INTO tags (file_id, tag) VALUES (?, ?)", (file_id, tag))
+            if should_close:
+                conn.commit()
+        finally:
+            if should_close:
+                conn.close()

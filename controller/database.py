@@ -3,7 +3,7 @@
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
+from typing import Any, Dict, Generator, Optional
 
 from controller.config import DATABASE_PATH
 
@@ -132,3 +132,37 @@ def get_db_connection() -> Generator[sqlite3.Connection, None, None]:
         yield conn
     finally:
         conn.close()
+
+
+def row_to_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    """
+    Safely convert a sqlite3.Row to a dictionary with NULL handling.
+    
+    Args:
+        row: A sqlite3.Row object or None
+        
+    Returns:
+        Dictionary with column names as keys, or None if row is None
+    """
+    if row is None:
+        return None
+    return {key: row[key] for key in row.keys()}
+
+
+def get_row_value(row: sqlite3.Row, key: str, default: Any = None) -> Any:
+    """
+    Safely get a value from a sqlite3.Row with NULL handling.
+    
+    Args:
+        row: A sqlite3.Row object
+        key: Column name to retrieve
+        default: Default value if column is NULL or missing
+        
+    Returns:
+        Column value or default if NULL/missing
+    """
+    try:
+        value = row[key]
+        return value if value is not None else default
+    except (KeyError, IndexError):
+        return default

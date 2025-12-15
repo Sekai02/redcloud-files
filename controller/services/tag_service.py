@@ -41,7 +41,7 @@ class TagService:
         
         return result
 
-    def add_tags_to_files(self, query_tags: List[str], new_tags: List[str], user_id: str) -> List[str]:
+    async def add_tags_to_files(self, query_tags: List[str], new_tags: List[str], user_id: str) -> List[str]:
         logger.info(f"Adding tags {new_tags} to files matching {query_tags} [user_id={user_id}]")
         if not query_tags:
             logger.warning("Add tags failed: empty query tags")
@@ -49,10 +49,10 @@ class TagService:
         if not new_tags:
             logger.warning("Add tags failed: empty new tags")
             raise InvalidTagQueryError("New tags cannot be empty")
-        
+
         file_ids = self.tag_repo.query_files_by_tags(query_tags, user_id)
         logger.info(f"Adding tags to {len(file_ids)} files [user_id={user_id}]")
-        
+
         with get_db_connection() as conn:
             try:
                 for file_id in file_ids:
@@ -63,18 +63,21 @@ class TagService:
                 conn.rollback()
                 logger.error(f"Failed to add tags: {e} [user_id={user_id}]", exc_info=True)
                 raise
-        
+
+        for file_id in file_ids:
+            await self._gossip_file_tags_update(file_id, user_id)
+
         return file_ids
 
-    def remove_tags_from_files(self, query_tags: List[str], tags_to_remove: List[str], user_id: str) -> tuple[List[str], List[SkippedFileInfo]]:
+    async def remove_tags_from_files(self, query_tags: List[str], tags_to_remove: List[str], user_id: str) -> tuple[List[str], List[SkippedFileInfo]]:
         """
         Remove tags from files matching query.
-        
+
         Args:
             query_tags: Tags to query files (AND logic)
             tags_to_remove: Tags to remove from matching files
             user_id: Owner ID of files
-            
+
         Returns:
             Tuple of (updated_file_ids, skipped_files)
             - updated_file_ids: Files where tags were successfully removed
@@ -87,13 +90,13 @@ class TagService:
         if not tags_to_remove:
             logger.warning("Remove tags failed: empty tags to remove")
             raise InvalidTagQueryError("Tags to remove cannot be empty")
-        
+
         file_ids = self.tag_repo.query_files_by_tags(query_tags, user_id)
         logger.info(f"Processing tag removal for {len(file_ids)} files [user_id={user_id}]")
-        
+
         updated_file_ids = []
         skipped_files = []
-        
+
         with get_db_connection() as conn:
             try:
                 for file_id in file_ids:
@@ -118,5 +121,58 @@ class TagService:
                 conn.rollback()
                 logger.error(f"Failed to remove tags: {e} [user_id={user_id}]", exc_info=True)
                 raise
-        
+
+        for file_id in updated_file_ids:
+            await self._gossip_file_tags_update(file_id, user_id)
+
         return updated_file_ids, skipped_files
+
+    async def _gossip_file_tags_update(self, file_id: str, user_id: str):
+        """
+        Gossip file with updated tags after tag modification.
+        """
+        try:
+            from controller.routes.internal_routes import _gossip_service
+            from controller.distributed_config import CONTROLLER_NODE_ID
+            from controller.repositories.chunk_repository import ChunkRepository
+
+            if _gossip_service is None:
+                return
+
+            file = self.file_repo.get_by_id(file_id)
+            if not file:
+                return
+
+            tags = self.tag_repo.get_tags_for_file(file_id)
+            chunks = ChunkRepository.get_chunks_by_file(file_id)
+
+            file_data = {
+                'file_id': file_id,
+                'name': file.name,
+                'size': file.size,
+                'owner_id': file.owner_id,
+                'created_at': file.created_at.isoformat(),
+                'deleted': 0,
+                'tags': tags,
+                'chunks': [
+                    {
+                        'chunk_id': chunk.chunk_id,
+                        'chunk_index': chunk.chunk_index,
+                        'size': chunk.size,
+                        'checksum': chunk.checksum
+                    }
+                    for chunk in chunks
+                ],
+                'vector_clock': '{}',
+                'last_modified_by': CONTROLLER_NODE_ID,
+                'version': 1
+            }
+
+            await _gossip_service.add_to_gossip_log(
+                entity_type='file',
+                entity_id=file_id,
+                operation='update',
+                data=file_data
+            )
+        except Exception as e:
+            logger.warning(f"Failed to gossip tag update: {e}")
