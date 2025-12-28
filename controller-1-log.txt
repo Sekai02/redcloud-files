@@ -1,0 +1,93 @@
+/app/controller/main.py:70: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+/app/controller/main.py:82: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("shutdown")
+2025-12-28 16:12:03 - controller - INFO - Discovering chunkserver peers via DNS...
+DNS discovery failed for 'chunkserver': [Errno -3] Temporary failure in name resolution
+2025-12-28 16:12:03 - controller - WARNING - DNS discovery failed for 'chunkserver': [Errno -3] Temporary failure in name resolution. Controller will start but file operations will fail until chunkservers are available.
+2025-12-28 16:12:03 - controller - INFO - Starting controller...
+INFO:     Will watch for changes in these directories: ['/app']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [1] using WatchFiles
+INFO:     Started server process [8]
+INFO:     Waiting for application startup.
+2025-12-28 16:12:03 - controller - INFO - Controller service starting up...
+2025-12-28 16:12:03 - controller - INFO - Database initialized
+2025-12-28 16:12:03 - controller.cleanup_task - INFO - Started orphaned chunk cleanup task (interval: 21600s)
+2025-12-28 16:12:03 - controller - INFO - Background cleanup task started
+INFO:     Application startup complete.
+2025-12-28 16:17:38 - controller - INFO - Request started: POST /auth/login [request_id=fa7eae7e-3876-40e6-88da-c7ca6d4a5d57] [user_id=anonymous]
+2025-12-28 16:17:38 - controller.services.auth_service - INFO - Login attempt for user: alejandro
+2025-12-28 16:17:38 - controller.services.auth_service - WARNING - Login failed: username 'alejandro' not found
+2025-12-28 16:17:38 - controller - WARNING - Invalid credentials error: Invalid username or password [request_id=fa7eae7e-3876-40e6-88da-c7ca6d4a5d57] path=/auth/login
+2025-12-28 16:17:38 - controller - INFO - Request completed: POST /auth/login status=401 duration=0.003s [request_id=fa7eae7e-3876-40e6-88da-c7ca6d4a5d57]
+INFO:     10.0.1.6:35900 - "POST /auth/login HTTP/1.1" 401 Unauthorized
+2025-12-28 16:18:16 - controller - INFO - Request started: POST /auth/register [request_id=0a9ccb7b-cebb-49d1-8c44-5685208854e8] [user_id=anonymous]
+2025-12-28 16:18:16 - controller.services.auth_service - INFO - Attempting to register user: alejandro
+2025-12-28 16:18:16 - controller.repositories.user_repository - INFO - User created successfully: alejandro [user_id=32f96c5d-f7ae-49f2-ae9d-5f7e3569283c]
+2025-12-28 16:18:16 - controller.services.auth_service - INFO - Successfully registered user: alejandro [user_id=32f96c5d-f7ae-49f2-ae9d-5f7e3569283c]
+2025-12-28 16:18:16 - controller - INFO - Request completed: POST /auth/register status=201 duration=0.209s [request_id=0a9ccb7b-cebb-49d1-8c44-5685208854e8]
+INFO:     10.0.1.6:48048 - "POST /auth/register HTTP/1.1" 201 Created
+2025-12-28 16:18:22 - controller - INFO - Request started: POST /auth/login [request_id=daffef08-9405-4779-be4c-723303f78203] [user_id=anonymous]
+2025-12-28 16:18:22 - controller.services.auth_service - INFO - Login attempt for user: alejandro
+2025-12-28 16:18:22 - controller.repositories.user_repository - INFO - API key updated successfully [user_id=32f96c5d-f7ae-49f2-ae9d-5f7e3569283c]
+2025-12-28 16:18:22 - controller.services.auth_service - INFO - Successfully logged in user: alejandro [user_id=32f96c5d-f7ae-49f2-ae9d-5f7e3569283c]
+2025-12-28 16:18:22 - controller - INFO - Request completed: POST /auth/login status=200 duration=0.208s [request_id=daffef08-9405-4779-be4c-723303f78203]
+INFO:     10.0.1.6:60402 - "POST /auth/login HTTP/1.1" 200 OK
+2025-12-28 16:20:13 - controller - INFO - Request started: POST /files [request_id=219b7ac9-9a57-41f2-a04a-0c532126365d] [user_id=anonymous]
+2025-12-28 16:20:13 - controller.chunkserver_client - INFO - Established gRPC channel to chunkserver:50051
+2025-12-28 16:20:13 - controller.services.file_service - ERROR - Upload failed for file 83105106-1ef9-46cb-887e-f4ff29b72371: Chunkserver unavailable: DNS resolution failed for chunkserver:50051: C-ares status is not ARES_SUCCESS qtype=A name=chunkserver is_balancer=0: DNS server returned general failure
+2025-12-28 16:20:13 - controller - ERROR - Chunkserver unavailable error: Chunkserver unavailable: DNS resolution failed for chunkserver:50051: C-ares status is not ARES_SUCCESS qtype=A name=chunkserver is_balancer=0: DNS server returned general failure [request_id=219b7ac9-9a57-41f2-a04a-0c532126365d] path=/files
+Traceback (most recent call last):
+  File "/app/controller/chunkserver_client.py", line 170, in _write_chunk_internal
+    response_bytes = await multi_callable(
+                     ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/grpc/aio/_call.py", line 328, in __await__
+    raise _create_rpc_error(
+grpc.aio._call.AioRpcError: <AioRpcError of RPC that terminated with:
+	status = StatusCode.UNAVAILABLE
+	details = "DNS resolution failed for chunkserver:50051: C-ares status is not ARES_SUCCESS qtype=A name=chunkserver is_balancer=0: DNS server returned general failure"
+	debug_error_string = "UNKNOWN:Error received from peer  {grpc_status:14, grpc_message:"DNS resolution failed for chunkserver:50051: C-ares status is not ARES_SUCCESS qtype=A name=chunkserver is_balancer=0: DNS server returned general failure"}"
+>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/usr/local/lib/python3.11/site-packages/fastapi/routing.py", line 101, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/fastapi/routing.py", line 355, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/fastapi/routing.py", line 243, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/controller/routes/file_routes.py", line 64, in upload_file
+    file_metadata = await file_service.upload_file(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/controller/services/file_service.py", line 52, in upload_file
+    success = await self.chunkserver_client.write_chunk(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/controller/chunkserver_client.py", line 132, in write_chunk
+    return await self._retry_with_backoff(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/controller/chunkserver_client.py", line 85, in _retry_with_backoff
+    return await operation(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/controller/chunkserver_client.py", line 191, in _write_chunk_internal
+    raise ChunkserverUnavailableError(f"Chunkserver unavailable: {e.details()}")
+controller.exceptions.ChunkserverUnavailableError: Chunkserver unavailable: DNS resolution failed for chunkserver:50051: C-ares status is not ARES_SUCCESS qtype=A name=chunkserver is_balancer=0: DNS server returned general failure
+2025-12-28 16:20:13 - controller - INFO - Request completed: POST /files status=503 duration=0.008s [request_id=219b7ac9-9a57-41f2-a04a-0c532126365d]
+INFO:     10.0.1.6:41654 - "POST /files HTTP/1.1" 503 Service Unavailable

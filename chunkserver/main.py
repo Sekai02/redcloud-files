@@ -52,7 +52,26 @@ async def serve(chunk_index: ChunkIndex) -> None:
 
 def main() -> None:
     """Bootstrap chunkserver service."""
+    from common.dns_discovery import discover_controller_peers
+    from common.constants import CONTROLLER_SERVICE_NAME
+
     logger.info("Initializing chunkserver...")
+    logger.info("Discovering controller peers via DNS...")
+
+    try:
+        peers = discover_controller_peers()
+        if peers:
+            logger.info(f"Discovered {len(peers)} controller peer(s): {peers}")
+        else:
+            logger.warning(
+                f"No controller peers found via DNS alias '{CONTROLLER_SERVICE_NAME}'. "
+                f"Chunkserver will start but may not receive requests until controllers are available."
+            )
+    except Exception as e:
+        logger.warning(
+            f"DNS discovery failed for '{CONTROLLER_SERVICE_NAME}': {e}. "
+            f"Chunkserver will start but may not receive requests until controllers are available."
+        )
 
     chunk_index = ChunkIndex()
 

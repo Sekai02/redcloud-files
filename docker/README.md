@@ -204,7 +204,6 @@ No manual IP configuration needed.
 - `DFS_DATABASE_PATH`: SQLite database path (default: `/app/data/metadata.db`)
 - `DFS_CONTROLLER_HOST`: Bind address (default: `0.0.0.0`)
 - `DFS_CONTROLLER_PORT`: HTTP port (default: `8000`)
-- `DFS_CHUNKSERVER_ADDRESS`: Chunkserver gRPC address (default: `chunkserver:50051`)
 
 ### Chunkserver
 
@@ -213,7 +212,6 @@ No manual IP configuration needed.
 
 ### CLI
 
-- `DFS_CONTROLLER_URL`: Controller endpoint (default: `http://controller:8000`)
 - `DFS_CONTROLLER_HOST`: Controller hostname (default: `controller`)
 - `DFS_CONTROLLER_PORT`: Controller port (default: `8000`)
 

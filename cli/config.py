@@ -110,10 +110,10 @@ class Config:
         Get controller base URL.
 
         Returns:
-            Base URL string (e.g., "http://localhost:8000")
+            Base URL string (e.g., "http://controller:8000")
         """
-        host = self.data.get('controller_host', 'localhost')
-        port = self.data.get('controller_port', 8000)
+        host = self.data.get('controller_host', self.DEFAULT_CONFIG['controller_host'])
+        port = self.data.get('controller_port', self.DEFAULT_CONFIG['controller_port'])
         return f"http://{host}:{port}"
 
     def get_timeout(self) -> int:

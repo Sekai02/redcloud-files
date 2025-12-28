@@ -294,7 +294,6 @@ docker run -d --network dfs-network --network-alias controller \
   -e DFS_DATABASE_PATH=/app/data/metadata.db \
   -e DFS_CONTROLLER_HOST=0.0.0.0 \
   -e DFS_CONTROLLER_PORT=8000 \
-  -e DFS_CHUNKSERVER_ADDRESS=chunkserver:50051 \
   redcloud-controller:latest
 ```
 
@@ -309,7 +308,6 @@ docker run -d --network dfs-network --network-alias chunkserver \
 ### CLI:
 ```bash
 docker run -it --rm --network dfs-network \
-  -e DFS_CONTROLLER_URL=http://controller:8000 \
   redcloud-cli:latest
 ```
 

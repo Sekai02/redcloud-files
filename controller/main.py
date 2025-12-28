@@ -289,6 +289,28 @@ def main() -> None:
     """
     Start the FastAPI server with uvicorn.
     """
+    from common.dns_discovery import discover_chunkserver_peers
+    from common.constants import CHUNKSERVER_SERVICE_NAME
+
+    logger.info("Discovering chunkserver peers via DNS...")
+
+    try:
+        peers = discover_chunkserver_peers()
+        if peers:
+            logger.info(f"Discovered {len(peers)} chunkserver peer(s): {peers}")
+        else:
+            logger.warning(
+                f"No chunkserver peers found via DNS alias '{CHUNKSERVER_SERVICE_NAME}'. "
+                f"Controller will start but file operations will fail until chunkservers are available."
+            )
+    except Exception as e:
+        logger.warning(
+            f"DNS discovery failed for '{CHUNKSERVER_SERVICE_NAME}': {e}. "
+            f"Controller will start but file operations will fail until chunkservers are available."
+        )
+
+    logger.info("Starting controller...")
+
     uvicorn.run(
         "controller.main:app",
         host=CONTROLLER_HOST,
