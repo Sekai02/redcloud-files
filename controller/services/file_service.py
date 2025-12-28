@@ -98,7 +98,37 @@ class FileService:
                         chunks_metadata,
                         conn=conn
                     )
-                    
+
+                    from controller.replication.operation_emitter import emit_file_created, emit_chunks_created
+
+                    chunks_payload = [
+                        {
+                            "chunk_id": chunk.chunk_id,
+                            "chunk_index": chunk.chunk_index,
+                            "size": chunk.size,
+                            "checksum": chunk.checksum
+                        }
+                        for chunk in chunks_metadata
+                    ]
+
+                    emit_chunks_created(
+                        file_id=file_id,
+                        chunks=chunks_payload,
+                        owner_id=owner_id,
+                        conn=conn
+                    )
+
+                    emit_file_created(
+                        file_id=file_id,
+                        name=file_name,
+                        size=file_size,
+                        owner_id=owner_id,
+                        created_at=created_at.isoformat(),
+                        tags=tags,
+                        replaced_file_id=replaced_file_id,
+                        conn=conn
+                    )
+
                     conn.commit()
                     logger.info(f"Successfully uploaded file {file_id} with {len(chunks_metadata)} chunks")
                 except Exception as e:
@@ -315,20 +345,34 @@ class FileService:
 
     async def delete_files(self, tags: List[str], user_id: str) -> List[str]:
         files = self.file_repo.query_by_tags_and_owner(tags, user_id)
-        
+
         deleted_file_ids = []
         chunks_to_delete = []
-        
+        file_chunks_map = {}
+
         for file in files:
             chunks = self.chunk_repo.get_chunks_by_file(file.file_id)
-            chunks_to_delete.extend([chunk.chunk_id for chunk in chunks])
-        
+            chunk_ids = [chunk.chunk_id for chunk in chunks]
+            chunks_to_delete.extend(chunk_ids)
+            file_chunks_map[file.file_id] = chunk_ids
+
         with get_db_connection() as conn:
             try:
+                from controller.replication.operation_emitter import emit_file_deleted
+
                 for file in files:
+                    emit_file_deleted(
+                        file_id=file.file_id,
+                        owner_id=file.owner_id,
+                        name=file.name,
+                        deleted_at=datetime.utcnow().isoformat(),
+                        chunk_ids=file_chunks_map.get(file.file_id, []),
+                        conn=conn
+                    )
+
                     self.file_repo.delete_file(file.file_id, conn=conn)
                     deleted_file_ids.append(file.file_id)
-                
+
                 conn.commit()
             except Exception as e:
                 conn.rollback()

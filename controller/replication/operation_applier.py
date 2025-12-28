@@ -47,6 +47,16 @@ async def apply_operation(operation: Operation) -> bool:
         return await _apply_user_created(operation)
     elif operation.operation_type == "API_KEY_UPDATED":
         return await _apply_api_key_updated(operation)
+    elif operation.operation_type == "FILE_CREATED":
+        return await _apply_file_created(operation)
+    elif operation.operation_type == "FILE_DELETED":
+        return await _apply_file_deleted(operation)
+    elif operation.operation_type == "TAGS_ADDED":
+        return await _apply_tags_added(operation)
+    elif operation.operation_type == "TAGS_REMOVED":
+        return await _apply_tags_removed(operation)
+    elif operation.operation_type == "CHUNKS_CREATED":
+        return await _apply_chunks_created(operation)
     else:
         logger.warning(f"Unknown operation type: {operation.operation_type}")
         return False
@@ -332,6 +342,418 @@ def _resolve_concurrent_user_creation(operations: List[Operation]) -> Operation:
         f"Concurrent user creation conflict: "
         f"selected operation {winner.operation_id} from {len(operations)} candidates "
         f"(timestamp={winner.timestamp_ms}, user_id={winner.user_id})"
+    )
+
+    return winner
+
+
+async def _apply_file_created(operation: Operation) -> bool:
+    """
+    Apply FILE_CREATED operation with conflict resolution.
+
+    Args:
+        operation: FILE_CREATED operation
+
+    Returns:
+        True if applied, False if skipped
+    """
+    payload = operation.payload
+    file_id = payload["file_id"]
+    name = payload["name"]
+    owner_id = payload["owner_id"]
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT file_id, name FROM files WHERE owner_id = ? AND name = ?",
+            (owner_id, name)
+        )
+        existing_file = cursor.fetchone()
+
+        cursor.execute(
+            "SELECT file_id, deleted_at FROM file_tombstones WHERE owner_id = ? AND name = ?",
+            (owner_id, name)
+        )
+        tombstone = cursor.fetchone()
+
+        if tombstone:
+            tombstone_deleted_at = tombstone[1]
+            if tombstone_deleted_at > payload["created_at"]:
+                logger.info(
+                    f"FILE_CREATED operation {operation.operation_id} loses to tombstone "
+                    f"(deleted_at={tombstone_deleted_at} > created_at={payload['created_at']}), skipping"
+                )
+                mark_operation_applied(operation.operation_id, conn=conn)
+                conn.commit()
+                return False
+
+            cursor.execute(
+                "DELETE FROM file_tombstones WHERE owner_id = ? AND name = ?",
+                (owner_id, name)
+            )
+            logger.info(f"Removed tombstone for ({owner_id}, {name}), creating file")
+
+        if existing_file:
+            existing_file_id = existing_file[0]
+
+            from controller.replication.operation_log import get_operations_by_ids
+
+            cursor.execute(
+                "SELECT operation_id FROM operations WHERE operation_type = 'FILE_CREATED' "
+                "AND user_id = ? AND payload LIKE ?",
+                (owner_id, f'%"name": "{name}"%')
+            )
+            file_created_ops_rows = cursor.fetchall()
+
+            if file_created_ops_rows:
+                file_created_op_ids = [row[0] for row in file_created_ops_rows]
+                file_created_ops = get_operations_by_ids(file_created_op_ids)
+
+                all_file_created_ops = [op for op in file_created_ops if op.payload.get("name") == name]
+                all_file_created_ops.append(operation)
+
+                winner = _resolve_concurrent_file_creation(all_file_created_ops)
+
+                if winner.operation_id != operation.operation_id:
+                    logger.info(
+                        f"Concurrent file creation conflict for ({owner_id}, {name}): "
+                        f"operation {operation.operation_id} lost to {winner.operation_id}, skipping"
+                    )
+                    mark_operation_applied(operation.operation_id, conn=conn)
+                    conn.commit()
+                    return False
+
+                logger.warning(
+                    f"Concurrent file creation conflict for ({owner_id}, {name}): "
+                    f"operation {operation.operation_id} won, updating file"
+                )
+
+                cursor.execute(
+                    """
+                    UPDATE files
+                    SET file_id = ?, size = ?, created_at = ?
+                    WHERE owner_id = ? AND name = ?
+                    """,
+                    (
+                        payload["file_id"],
+                        payload["size"],
+                        payload["created_at"],
+                        owner_id,
+                        name
+                    )
+                )
+
+                cursor.execute("DELETE FROM tags WHERE file_id = ?", (existing_file_id,))
+                for tag in payload["tags"]:
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO tags (file_id, tag) VALUES (?, ?)",
+                        (payload["file_id"], tag)
+                    )
+            else:
+                logger.debug(f"File '{name}' already exists for owner {owner_id}, skipping FILE_CREATED")
+                mark_operation_applied(operation.operation_id, conn=conn)
+                conn.commit()
+                return False
+        else:
+            cursor.execute(
+                """
+                INSERT INTO files (file_id, name, size, owner_id, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["file_id"],
+                    payload["name"],
+                    payload["size"],
+                    payload["owner_id"],
+                    payload["created_at"]
+                )
+            )
+
+            for tag in payload["tags"]:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO tags (file_id, tag) VALUES (?, ?)",
+                    (payload["file_id"], tag)
+                )
+
+            logger.info(
+                f"Applied FILE_CREATED operation [operation_id={operation.operation_id}, "
+                f"file_id={payload['file_id']}, name={name}]"
+            )
+
+        _merge_vector_clock(operation.vector_clock, conn=conn)
+        mark_operation_applied(operation.operation_id, conn=conn)
+        conn.commit()
+
+    return True
+
+
+async def _apply_file_deleted(operation: Operation) -> bool:
+    """
+    Apply FILE_DELETED operation with tombstone creation.
+
+    Args:
+        operation: FILE_DELETED operation
+
+    Returns:
+        True if applied, False if skipped
+    """
+    payload = operation.payload
+    file_id = payload["file_id"]
+    owner_id = payload["owner_id"]
+    name = payload["name"]
+    deleted_at = payload["deleted_at"]
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT file_id, created_at FROM files WHERE owner_id = ? AND name = ?",
+            (owner_id, name)
+        )
+        existing_file = cursor.fetchone()
+
+        if existing_file:
+            existing_created_at = existing_file[1]
+
+            if deleted_at < existing_created_at:
+                logger.info(
+                    f"FILE_DELETED operation {operation.operation_id} loses to newer file "
+                    f"(deleted_at={deleted_at} < created_at={existing_created_at}), skipping"
+                )
+                mark_operation_applied(operation.operation_id, conn=conn)
+                conn.commit()
+                return False
+
+            cursor.execute("DELETE FROM files WHERE file_id = ?", (file_id,))
+
+            logger.info(
+                f"Applied FILE_DELETED operation [operation_id={operation.operation_id}, "
+                f"file_id={file_id}, name={name}]"
+            )
+        else:
+            logger.debug(
+                f"File {file_id} not found for FILE_DELETED, may have been already deleted"
+            )
+
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO file_tombstones
+            (file_id, owner_id, name, deleted_at, deleted_by_controller_id, operation_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                file_id,
+                owner_id,
+                name,
+                deleted_at,
+                payload["deleted_by_controller_id"],
+                operation.operation_id
+            )
+        )
+
+        _merge_vector_clock(operation.vector_clock, conn=conn)
+        mark_operation_applied(operation.operation_id, conn=conn)
+        conn.commit()
+
+    return True
+
+
+async def _apply_tags_added(operation: Operation) -> bool:
+    """
+    Apply TAGS_ADDED operation with set-convergent semantics.
+
+    Args:
+        operation: TAGS_ADDED operation
+
+    Returns:
+        True if applied, False if skipped
+    """
+    payload = operation.payload
+    file_id = payload["file_id"]
+    tags = payload["tags"]
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT file_id FROM files WHERE file_id = ?", (file_id,))
+        if not cursor.fetchone():
+            logger.warning(
+                f"File {file_id} not found for TAGS_ADDED operation, skipping"
+            )
+            mark_operation_applied(operation.operation_id, conn=conn)
+            conn.commit()
+            return False
+
+        for tag in tags:
+            cursor.execute(
+                "INSERT OR IGNORE INTO tags (file_id, tag) VALUES (?, ?)",
+                (file_id, tag)
+            )
+
+        logger.info(
+            f"Applied TAGS_ADDED operation [operation_id={operation.operation_id}, "
+            f"file_id={file_id}, tags={tags}]"
+        )
+
+        _merge_vector_clock(operation.vector_clock, conn=conn)
+        mark_operation_applied(operation.operation_id, conn=conn)
+        conn.commit()
+
+    return True
+
+
+async def _apply_tags_removed(operation: Operation) -> bool:
+    """
+    Apply TAGS_REMOVED operation with would_become_tagless validation.
+
+    Args:
+        operation: TAGS_REMOVED operation
+
+    Returns:
+        True if applied, False if skipped
+    """
+    payload = operation.payload
+    file_id = payload["file_id"]
+    tags = payload["tags"]
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT file_id FROM files WHERE file_id = ?", (file_id,))
+        if not cursor.fetchone():
+            logger.debug(
+                f"File {file_id} not found for TAGS_REMOVED operation, may have been deleted"
+            )
+            mark_operation_applied(operation.operation_id, conn=conn)
+            conn.commit()
+            return False
+
+        cursor.execute(
+            "SELECT tag FROM tags WHERE file_id = ?",
+            (file_id,)
+        )
+        current_tags = set(row[0] for row in cursor.fetchall())
+
+        remaining_tags = current_tags - set(tags)
+
+        if not remaining_tags:
+            logger.warning(
+                f"TAGS_REMOVED operation {operation.operation_id} would leave file {file_id} tagless, skipping"
+            )
+            mark_operation_applied(operation.operation_id, conn=conn)
+            conn.commit()
+            return False
+
+        for tag in tags:
+            cursor.execute(
+                "DELETE FROM tags WHERE file_id = ? AND tag = ?",
+                (file_id, tag)
+            )
+
+        logger.info(
+            f"Applied TAGS_REMOVED operation [operation_id={operation.operation_id}, "
+            f"file_id={file_id}, tags={tags}]"
+        )
+
+        _merge_vector_clock(operation.vector_clock, conn=conn)
+        mark_operation_applied(operation.operation_id, conn=conn)
+        conn.commit()
+
+    return True
+
+
+async def _apply_chunks_created(operation: Operation) -> bool:
+    """
+    Apply CHUNKS_CREATED operation with checksum verification.
+
+    Args:
+        operation: CHUNKS_CREATED operation
+
+    Returns:
+        True if applied, False if skipped
+    """
+    payload = operation.payload
+    file_id = payload["file_id"]
+    chunks = payload["chunks"]
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT file_id FROM files WHERE file_id = ?", (file_id,))
+        if not cursor.fetchone():
+            logger.warning(
+                f"File {file_id} not found for CHUNKS_CREATED operation, skipping"
+            )
+            mark_operation_applied(operation.operation_id, conn=conn)
+            conn.commit()
+            return False
+
+        for chunk in chunks:
+            chunk_id = chunk["chunk_id"]
+            chunk_index = chunk["chunk_index"]
+            size = chunk["size"]
+            checksum = chunk["checksum"]
+
+            cursor.execute(
+                "SELECT checksum FROM chunks WHERE file_id = ? AND chunk_index = ?",
+                (file_id, chunk_index)
+            )
+            existing = cursor.fetchone()
+
+            if existing:
+                existing_checksum = existing[0]
+                if existing_checksum != checksum:
+                    logger.error(
+                        f"Chunk checksum mismatch for file {file_id} chunk {chunk_index}: "
+                        f"existing={existing_checksum}, incoming={checksum}"
+                    )
+                    mark_operation_applied(operation.operation_id, conn=conn)
+                    conn.commit()
+                    return False
+
+                logger.debug(f"Chunk already exists with matching checksum: {chunk_id}")
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO chunks (chunk_id, file_id, chunk_index, size, checksum)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (chunk_id, file_id, chunk_index, size, checksum)
+                )
+
+        logger.info(
+            f"Applied CHUNKS_CREATED operation [operation_id={operation.operation_id}, "
+            f"file_id={file_id}, chunks_count={len(chunks)}]"
+        )
+
+        _merge_vector_clock(operation.vector_clock, conn=conn)
+        mark_operation_applied(operation.operation_id, conn=conn)
+        conn.commit()
+
+    return True
+
+
+def _resolve_concurrent_file_creation(operations: List[Operation]) -> Operation:
+    """
+    Resolve concurrent file creation conflict using LWW + tiebreaker.
+
+    Args:
+        operations: List of FILE_CREATED operations for the same (owner_id, name)
+
+    Returns:
+        Winning operation
+    """
+    sorted_ops = sorted(
+        operations,
+        key=lambda op: (op.timestamp_ms, op.payload["file_id"])
+    )
+    winner = sorted_ops[0]
+
+    logger.warning(
+        f"Concurrent file creation conflict: "
+        f"selected operation {winner.operation_id} from {len(operations)} candidates "
+        f"(timestamp_ms={winner.timestamp_ms}, file_id={winner.payload['file_id']})"
     )
 
     return winner

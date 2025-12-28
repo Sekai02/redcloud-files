@@ -1,7 +1,7 @@
 """
 Operation log SQLite interface for replication.
 
-Provides CRUD operations for the user_operations table, including
+Provides CRUD operations for the operations table, including
 inserting new operations, querying by various criteria, and marking
 operations as applied.
 """
@@ -46,7 +46,7 @@ def insert_operation(
     def _insert(cursor: sqlite3.Cursor):
         cursor.execute(
             """
-            INSERT INTO user_operations
+            INSERT INTO operations
             (operation_id, operation_type, user_id, timestamp_ms, vector_clock,
              payload, applied, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -89,7 +89,7 @@ def get_operation_by_id(operation_id: str) -> Optional[Operation]:
             """
             SELECT operation_id, operation_type, user_id, timestamp_ms,
                    vector_clock, payload, applied, created_at
-            FROM user_operations
+            FROM operations
             WHERE operation_id = ?
             """,
             (operation_id,)
@@ -127,7 +127,7 @@ def get_recent_operations(limit: int = 100) -> List[Operation]:
             """
             SELECT operation_id, operation_type, user_id, timestamp_ms,
                    vector_clock, payload, applied, created_at
-            FROM user_operations
+            FROM operations
             ORDER BY timestamp_ms DESC
             LIMIT ?
             """,
@@ -159,7 +159,7 @@ def get_all_operation_ids() -> List[str]:
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT operation_id FROM user_operations")
+        cursor.execute("SELECT operation_id FROM operations")
         rows = cursor.fetchall()
         return [row[0] for row in rows]
 
@@ -184,7 +184,7 @@ def get_operations_by_ids(operation_ids: List[str]) -> List[Operation]:
             f"""
             SELECT operation_id, operation_type, user_id, timestamp_ms,
                    vector_clock, payload, applied, created_at
-            FROM user_operations
+            FROM operations
             WHERE operation_id IN ({placeholders})
             """,
             operation_ids
@@ -222,7 +222,7 @@ def get_operations_for_user(user_id: str) -> List[Operation]:
             """
             SELECT operation_id, operation_type, user_id, timestamp_ms,
                    vector_clock, payload, applied, created_at
-            FROM user_operations
+            FROM operations
             WHERE user_id = ?
             ORDER BY timestamp_ms ASC
             """,
@@ -255,7 +255,7 @@ def mark_operation_applied(operation_id: str, conn: Optional[sqlite3.Connection]
     """
     def _update(cursor: sqlite3.Cursor):
         cursor.execute(
-            "UPDATE user_operations SET applied = 1 WHERE operation_id = ?",
+            "UPDATE operations SET applied = 1 WHERE operation_id = ?",
             (operation_id,)
         )
 
@@ -284,7 +284,7 @@ def get_recent_operation_summaries(limit: int = 100) -> List[OperationSummary]:
         cursor.execute(
             """
             SELECT operation_id, operation_type, user_id, timestamp_ms, vector_clock
-            FROM user_operations
+            FROM operations
             ORDER BY timestamp_ms DESC
             LIMIT ?
             """,

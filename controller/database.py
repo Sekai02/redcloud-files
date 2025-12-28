@@ -8,6 +8,23 @@ from typing import Generator
 from controller.config import DATABASE_PATH
 
 
+def _migrate_user_operations_to_operations(cursor: sqlite3.Cursor) -> None:
+    """
+    Migrate user_operations table to operations table.
+    """
+    cursor.execute("""
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='user_operations'
+    """)
+
+    if cursor.fetchone():
+        cursor.execute("ALTER TABLE user_operations RENAME TO operations")
+
+        cursor.execute("DROP INDEX IF EXISTS idx_user_ops_user_id")
+        cursor.execute("DROP INDEX IF EXISTS idx_user_ops_timestamp")
+        cursor.execute("DROP INDEX IF EXISTS idx_user_ops_applied")
+
+
 def init_database() -> None:
     """
     Initialize database and create tables if they don't exist.
@@ -17,6 +34,8 @@ def init_database() -> None:
 
     with get_db_connection() as conn:
         cursor = conn.cursor()
+
+        _migrate_user_operations_to_operations(cursor)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -62,7 +81,7 @@ def init_database() -> None:
         """)
 
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_operations (
+            CREATE TABLE IF NOT EXISTS operations (
                 operation_id TEXT PRIMARY KEY,
                 operation_type TEXT NOT NULL,
                 user_id TEXT NOT NULL,
@@ -93,19 +112,47 @@ def init_database() -> None:
         """)
 
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS file_tombstones (
+                file_id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                deleted_by_controller_id TEXT NOT NULL,
+                operation_id TEXT NOT NULL,
+                FOREIGN KEY(owner_id) REFERENCES users(user_id)
+            )
+        """)
+
+        cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_files_owner_name ON files(owner_id, name)
         """)
 
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_ops_user_id ON user_operations(user_id)
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_files_owner_name_unique ON files(owner_id, name)
         """)
 
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_ops_timestamp ON user_operations(timestamp_ms)
+            CREATE INDEX IF NOT EXISTS idx_tombstones_owner_name ON file_tombstones(owner_id, name)
         """)
 
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_ops_applied ON user_operations(applied)
+            CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON file_tombstones(deleted_at)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ops_user_id ON operations(user_id)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ops_timestamp ON operations(timestamp_ms)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ops_applied ON operations(applied)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ops_type ON operations(operation_type)
         """)
 
         conn.commit()
