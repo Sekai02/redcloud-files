@@ -62,7 +62,50 @@ def init_database() -> None:
         """)
 
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_operations (
+                operation_id TEXT PRIMARY KEY,
+                operation_type TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                vector_clock TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                applied INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS vector_clock_state (
+                controller_id TEXT PRIMARY KEY,
+                sequence INTEGER NOT NULL,
+                last_seen_at TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS peer_state (
+                peer_address TEXT PRIMARY KEY,
+                peer_controller_id TEXT,
+                last_gossip_at TEXT,
+                last_vector_clock TEXT,
+                is_alive INTEGER DEFAULT 1
+            )
+        """)
+
+        cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_files_owner_name ON files(owner_id, name)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_ops_user_id ON user_operations(user_id)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_ops_timestamp ON user_operations(timestamp_ms)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_ops_applied ON user_operations(applied)
         """)
 
         conn.commit()

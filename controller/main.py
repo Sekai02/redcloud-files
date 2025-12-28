@@ -13,6 +13,9 @@ from controller.database import init_database
 from controller.routes.auth_routes import router as auth_router
 from controller.routes.file_routes import router as file_router
 from controller.cleanup_task import OrphanedChunkCleaner
+from controller.replication.grpc_server import ReplicationServer
+from controller.replication.gossip_manager import GossipManager
+from controller.replication.anti_entropy_manager import AntiEntropyManager
 from controller.exceptions import (
     DFSException,
     UserAlreadyExistsError,
@@ -35,6 +38,9 @@ app = FastAPI(
 )
 
 cleanup_task = OrphanedChunkCleaner()
+replication_server = ReplicationServer()
+gossip_manager = GossipManager()
+anti_entropy_manager = AntiEntropyManager(gossip_manager)
 
 
 @app.middleware("http")
@@ -75,6 +81,16 @@ async def startup_event():
     logger.info("Controller service starting up...")
     init_database()
     logger.info("Database initialized")
+
+    await replication_server.start()
+    logger.info("Replication gRPC server started")
+
+    await gossip_manager.start()
+    logger.info("Gossip manager started")
+
+    await anti_entropy_manager.start()
+    logger.info("Anti-entropy manager started")
+
     await cleanup_task.start()
     logger.info("Background cleanup task started")
 
@@ -85,6 +101,16 @@ async def shutdown_event():
     Cleanup resources on application shutdown.
     """
     logger.info("Controller service shutting down...")
+
+    await anti_entropy_manager.stop()
+    logger.info("Anti-entropy manager stopped")
+
+    await gossip_manager.stop()
+    logger.info("Gossip manager stopped")
+
+    await replication_server.stop()
+    logger.info("Replication gRPC server stopped")
+
     await cleanup_task.stop()
     logger.info("Cleanup task stopped")
 
