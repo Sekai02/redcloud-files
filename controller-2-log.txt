@@ -1,0 +1,58 @@
+/app/controller/main.py:70: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+/app/controller/main.py:82: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("shutdown")
+2025-12-28 17:14:05 - controller - INFO - Discovering chunkserver peers via DNS...
+2025-12-28 17:14:05 - controller - INFO - Discovered 1 chunkserver peer(s): ['10.0.1.4:50051']
+2025-12-28 17:14:05 - controller - INFO - Starting controller...
+INFO:     Will watch for changes in these directories: ['/app']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [1] using WatchFiles
+INFO:     Started server process [8]
+INFO:     Waiting for application startup.
+2025-12-28 17:14:06 - controller - INFO - Controller service starting up...
+INFO:     Application startup complete.
+2025-12-28 17:14:06 - controller - INFO - Database initialized
+2025-12-28 17:14:06 - controller.cleanup_task - INFO - Started orphaned chunk cleanup task (interval: 21600s)
+2025-12-28 17:14:06 - controller - INFO - Background cleanup task started
+2025-12-28 17:16:02 - controller - INFO - Request started: POST /auth/login [request_id=0342729a-9812-411c-a38b-acf26537edf5] [user_id=anonymous]
+2025-12-28 17:16:02 - controller.services.auth_service - INFO - Login attempt for user: alejandro
+2025-12-28 17:16:02 - controller.services.auth_service - WARNING - Login failed: username 'alejandro' not found
+2025-12-28 17:16:02 - controller - WARNING - Invalid credentials error: Invalid username or password [request_id=0342729a-9812-411c-a38b-acf26537edf5] path=/auth/login
+2025-12-28 17:16:02 - controller - INFO - Request completed: POST /auth/login status=401 duration=0.003s [request_id=0342729a-9812-411c-a38b-acf26537edf5]
+INFO:     10.0.1.9:36094 - "POST /auth/login HTTP/1.1" 401 Unauthorized
+2025-12-28 17:16:06 - controller - INFO - Request started: POST /auth/register [request_id=ea43afef-dc87-4010-a233-9fdbeab9b99b] [user_id=anonymous]
+2025-12-28 17:16:06 - controller.services.auth_service - INFO - Attempting to register user: alejandro
+2025-12-28 17:16:06 - controller.repositories.user_repository - INFO - User created successfully: alejandro [user_id=47eeb998-bab1-4974-8f33-268b759a3e33]
+2025-12-28 17:16:06 - controller.services.auth_service - INFO - Successfully registered user: alejandro [user_id=47eeb998-bab1-4974-8f33-268b759a3e33]
+2025-12-28 17:16:06 - controller - INFO - Request completed: POST /auth/register status=201 duration=0.213s [request_id=ea43afef-dc87-4010-a233-9fdbeab9b99b]
+INFO:     10.0.1.9:36094 - "POST /auth/register HTTP/1.1" 201 Created
+2025-12-28 17:16:42 - controller - INFO - Request started: POST /auth/login [request_id=f11bedc0-d4cc-4e58-b807-d3ac1068fbb5] [user_id=anonymous]
+2025-12-28 17:16:42 - controller.services.auth_service - INFO - Login attempt for user: alejandro
+2025-12-28 17:16:42 - controller.repositories.user_repository - INFO - API key updated successfully [user_id=47eeb998-bab1-4974-8f33-268b759a3e33]
+2025-12-28 17:16:42 - controller.services.auth_service - INFO - Successfully logged in user: alejandro [user_id=47eeb998-bab1-4974-8f33-268b759a3e33]
+2025-12-28 17:16:42 - controller - INFO - Request completed: POST /auth/login status=200 duration=0.216s [request_id=f11bedc0-d4cc-4e58-b807-d3ac1068fbb5]
+INFO:     10.0.1.9:34380 - "POST /auth/login HTTP/1.1" 200 OK
+2025-12-28 17:18:50 - controller - INFO - Request started: POST /files [request_id=1c33e056-cd4f-4e00-8be9-9e05796b7f9e] [user_id=anonymous]
+2025-12-28 17:18:50 - controller.chunkserver_client - INFO - Established gRPC channel to chunkserver:50051
+2025-12-28 17:18:50 - controller.chunkserver_client - INFO - Successfully wrote chunk d185b01d-4aed-4623-8f9f-12e0c6b7bb8d
+2025-12-28 17:18:50 - controller.services.file_service - INFO - Wrote chunk 0 for file 3a712fa7-c748-4448-9541-bf8d5b1a37d7
+2025-12-28 17:18:50 - controller.repositories.chunk_repository - INFO - Created 1 chunks successfully
+2025-12-28 17:18:50 - controller.services.file_service - INFO - Successfully uploaded file 3a712fa7-c748-4448-9541-bf8d5b1a37d7 with 1 chunks
+2025-12-28 17:18:50 - controller - INFO - Request completed: POST /files status=201 duration=0.012s [request_id=1c33e056-cd4f-4e00-8be9-9e05796b7f9e]
+INFO:     10.0.1.9:49982 - "POST /files HTTP/1.1" 201 Created
+2025-12-28 17:22:08 - controller - INFO - Request started: GET /files [request_id=c33a3f38-f8cd-412d-8f13-83ca02b92d43] [user_id=anonymous]
+2025-12-28 17:22:08 - controller.services.tag_service - INFO - Querying files by tags: ['document'] [user_id=47eeb998-bab1-4974-8f33-268b759a3e33]
+2025-12-28 17:22:08 - controller.services.tag_service - INFO - Found 1 files matching tags ['document'] [user_id=47eeb998-bab1-4974-8f33-268b759a3e33]
+2025-12-28 17:22:08 - controller - INFO - Request completed: GET /files status=200 duration=0.002s [request_id=c33a3f38-f8cd-412d-8f13-83ca02b92d43]
+INFO:     10.0.1.9:47572 - "GET /files?tags=document HTTP/1.1" 200 OK
