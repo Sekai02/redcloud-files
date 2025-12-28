@@ -6,6 +6,7 @@ from typing import Optional
 
 from common.logging_config import get_logger
 from controller.database import get_db_connection
+from controller.replication.operation_emitter import emit_user_created, emit_api_key_updated
 
 logger = get_logger(__name__)
 
@@ -40,12 +41,22 @@ class UserRepository:
                     """,
                     (user_id, username, password_hash, api_key, created_at.isoformat(), created_at.isoformat())
                 )
+
+                emit_user_created(
+                    user_id=user_id,
+                    username=username,
+                    password_hash=password_hash,
+                    api_key=api_key,
+                    created_at=created_at.isoformat(),
+                    conn=conn
+                )
+
                 conn.commit()
                 logger.info(f"User created successfully: {username} [user_id={user_id}]")
             except Exception as e:
                 logger.error(f"Failed to create user {username}: {e}", exc_info=True)
                 raise
-            
+
             return User(
                 user_id=user_id,
                 username=username,
@@ -113,12 +124,20 @@ class UserRepository:
             try:
                 cursor.execute(
                     """
-                    UPDATE users 
+                    UPDATE users
                     SET api_key = ?, key_updated_at = ?
                     WHERE user_id = ?
                     """,
                     (new_api_key, updated_at.isoformat(), user_id)
                 )
+
+                emit_api_key_updated(
+                    user_id=user_id,
+                    new_api_key=new_api_key,
+                    key_updated_at=updated_at.isoformat(),
+                    conn=conn
+                )
+
                 conn.commit()
                 logger.info(f"API key updated successfully [user_id={user_id}]")
             except Exception as e:
