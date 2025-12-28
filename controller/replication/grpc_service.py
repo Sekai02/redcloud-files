@@ -11,7 +11,8 @@ from common.protocol import (
     GossipMessage, GossipResponse,
     GetStateSummaryRequest, StateSummary,
     FetchOperationsRequest, FetchOperationsResponse,
-    PushOperationsRequest, PushOperationsResponse
+    PushOperationsRequest, PushOperationsResponse,
+    QueryChunkLivenessRequest, QueryChunkLivenessResponse
 )
 from controller.replication.controller_id import get_controller_id
 from controller.replication.operation_log import (
@@ -177,6 +178,50 @@ class ReplicationServicer:
                 error_message=str(e)
             )
             return response.to_json()
+
+    async def QueryChunkLiveness(self, request_bytes: bytes) -> bytes:
+        """
+        Handle chunk liveness query for distributed GC.
+
+        Args:
+            request_bytes: Serialized QueryChunkLivenessRequest
+
+        Returns:
+            Serialized QueryChunkLivenessResponse
+        """
+        try:
+            request = QueryChunkLivenessRequest.from_json(request_bytes)
+
+            chunk_id = request.chunk_id
+
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    "SELECT file_id FROM chunks WHERE chunk_id = ?",
+                    (chunk_id,)
+                )
+                file_rows = cursor.fetchall()
+
+                referenced_by_files = [row[0] for row in file_rows]
+                is_live = len(referenced_by_files) > 0
+
+            response = QueryChunkLivenessResponse(
+                chunk_id=chunk_id,
+                is_live=is_live,
+                referenced_by_files=referenced_by_files
+            )
+
+            logger.debug(
+                f"Chunk liveness query for {chunk_id}: "
+                f"is_live={is_live}, files={len(referenced_by_files)}"
+            )
+
+            return response.to_json()
+
+        except Exception as e:
+            logger.error(f"Error querying chunk liveness: {e}", exc_info=True)
+            raise
 
     def _get_current_vector_clock(self) -> dict:
         """

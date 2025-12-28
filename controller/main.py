@@ -16,6 +16,7 @@ from controller.cleanup_task import OrphanedChunkCleaner
 from controller.replication.grpc_server import ReplicationServer
 from controller.replication.gossip_manager import GossipManager
 from controller.replication.anti_entropy_manager import AntiEntropyManager
+from controller.replication.chunk_gc_manager import ChunkGCManager
 from controller.exceptions import (
     DFSException,
     UserAlreadyExistsError,
@@ -41,6 +42,7 @@ cleanup_task = OrphanedChunkCleaner()
 replication_server = ReplicationServer()
 gossip_manager = GossipManager()
 anti_entropy_manager = AntiEntropyManager(gossip_manager)
+chunk_gc_manager = ChunkGCManager(gossip_manager)
 
 
 @app.middleware("http")
@@ -91,6 +93,9 @@ async def startup_event():
     await anti_entropy_manager.start()
     logger.info("Anti-entropy manager started")
 
+    await chunk_gc_manager.start()
+    logger.info("Chunk GC manager started")
+
     await cleanup_task.start()
     logger.info("Background cleanup task started")
 
@@ -101,6 +106,9 @@ async def shutdown_event():
     Cleanup resources on application shutdown.
     """
     logger.info("Controller service shutting down...")
+
+    await chunk_gc_manager.stop()
+    logger.info("Chunk GC manager stopped")
 
     await anti_entropy_manager.stop()
     logger.info("Anti-entropy manager stopped")

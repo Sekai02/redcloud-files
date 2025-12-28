@@ -73,6 +73,9 @@ class ReplicationServer:
         async def push_operations_handler(request, context):
             return await self.servicer.PushOperations(request)
 
+        async def query_chunk_liveness_handler(request, context):
+            return await self.servicer.QueryChunkLiveness(request)
+
         self.server.add_generic_rpc_handlers((
             grpc.method_handlers_generic_handler(
                 'replication.ReplicationService',
@@ -94,6 +97,11 @@ class ReplicationServer:
                     ),
                     'PushOperations': grpc.unary_unary_rpc_method_handler(
                         push_operations_handler,
+                        request_deserializer=lambda x: x,
+                        response_serializer=lambda x: x,
+                    ),
+                    'QueryChunkLiveness': grpc.unary_unary_rpc_method_handler(
+                        query_chunk_liveness_handler,
                         request_deserializer=lambda x: x,
                         response_serializer=lambda x: x,
                     ),

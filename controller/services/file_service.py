@@ -185,19 +185,19 @@ class FileService:
     async def _cleanup_chunks(self, chunk_ids: List[str]) -> List[str]:
         """
         Delete chunks from chunkserver with retry logic.
-        
+
         Args:
             chunk_ids: List of chunk IDs to delete
-            
+
         Returns:
             List of chunk IDs that could not be deleted
         """
         failed_deletions = []
-        
+
         for chunk_id in chunk_ids:
             max_attempts = 3
             deleted = False
-            
+
             for attempt in range(max_attempts):
                 try:
                     await self.chunkserver_client.delete_chunk(chunk_id)
@@ -211,45 +211,46 @@ class FileService:
                         await asyncio.sleep(delay)
                     else:
                         logger.error(f"Failed to delete orphaned chunk {chunk_id} after {max_attempts} attempts: {e}")
-            
+
             if not deleted:
                 failed_deletions.append(chunk_id)
-        
+
         if failed_deletions:
-            await self._log_orphaned_chunks(failed_deletions)
-        
+            self._mark_chunks_for_gc(failed_deletions)
+
         return failed_deletions
-    
-    async def _log_orphaned_chunks(self, chunk_ids: List[str]) -> None:
+
+    def _mark_chunks_for_gc(self, chunk_ids: List[str]) -> None:
         """
-        Log orphaned chunks that could not be deleted.
-        
+        Mark chunks for distributed garbage collection.
+
         Args:
-            chunk_ids: List of chunk IDs that failed deletion
+            chunk_ids: List of chunk IDs to mark for GC
         """
-        orphaned_log_path = Path("./data/orphaned_chunks.json")
-        
         try:
-            if orphaned_log_path.exists():
-                with open(orphaned_log_path, 'r') as f:
-                    orphaned_data = json.load(f)
-            else:
-                orphaned_data = []
-            
-            for chunk_id in chunk_ids:
-                orphaned_data.append({
-                    "chunk_id": chunk_id,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "reason": "Failed cleanup after upload failure or file deletion"
-                })
-            
-            orphaned_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(orphaned_log_path, 'w') as f:
-                json.dump(orphaned_data, f, indent=2)
-            
-            logger.warning(f"Logged {len(chunk_ids)} orphaned chunks to {orphaned_log_path}")
+            from controller.replication.chunk_gc_manager import ChunkGCManager
+
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                now = datetime.utcnow().isoformat()
+
+                for chunk_id in chunk_ids:
+                    cursor.execute(
+                        """
+                        INSERT INTO chunk_liveness (chunk_id, referenced_by_files, last_verified_at, marked_for_gc)
+                        VALUES (?, ?, ?, 1)
+                        ON CONFLICT(chunk_id) DO UPDATE SET
+                            marked_for_gc = 1,
+                            last_verified_at = excluded.last_verified_at
+                        """,
+                        (chunk_id, json.dumps([]), now)
+                    )
+
+                conn.commit()
+
+            logger.info(f"Marked {len(chunk_ids)} chunks for distributed GC")
         except Exception as e:
-            logger.error(f"Failed to log orphaned chunks: {e}")
+            logger.error(f"Failed to mark chunks for GC: {e}", exc_info=True)
 
     async def download_file(self, file_id: str, user_id: str) -> tuple[File, AsyncIterator[bytes]]:
         file = self.file_repo.get_by_id(file_id)

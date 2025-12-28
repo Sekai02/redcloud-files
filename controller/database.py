@@ -124,6 +124,15 @@ def init_database() -> None:
         """)
 
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chunk_liveness (
+                chunk_id TEXT PRIMARY KEY,
+                referenced_by_files TEXT NOT NULL,
+                last_verified_at TEXT NOT NULL,
+                marked_for_gc INTEGER DEFAULT 0
+            )
+        """)
+
+        cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_files_owner_name ON files(owner_id, name)
         """)
 
@@ -153,6 +162,10 @@ def init_database() -> None:
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_ops_type ON operations(operation_type)
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chunk_liveness_gc ON chunk_liveness(marked_for_gc)
         """)
 
         conn.commit()

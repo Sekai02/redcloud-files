@@ -503,3 +503,45 @@ class GetStateSummaryRequest:
     def from_json(cls, data: bytes) -> 'GetStateSummaryRequest':
         """Deserialize from JSON bytes."""
         return cls()
+
+
+@dataclass
+class QueryChunkLivenessRequest:
+    """Request to query if a chunk is still referenced by any files."""
+    chunk_id: str
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({'chunk_id': self.chunk_id}).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'QueryChunkLivenessRequest':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(chunk_id=obj['chunk_id'])
+
+
+@dataclass
+class QueryChunkLivenessResponse:
+    """Response with chunk liveness status."""
+    chunk_id: str
+    is_live: bool
+    referenced_by_files: List[str]
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'chunk_id': self.chunk_id,
+            'is_live': self.is_live,
+            'referenced_by_files': self.referenced_by_files
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'QueryChunkLivenessResponse':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(
+            chunk_id=obj['chunk_id'],
+            is_live=obj['is_live'],
+            referenced_by_files=obj['referenced_by_files']
+        )
