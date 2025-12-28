@@ -1,6 +1,0 @@
-2025-12-28 17:11:53 - chunkserver - INFO - Initializing chunkserver...
-2025-12-28 17:11:53 - chunkserver - INFO - Discovering controller peers via DNS...
-2025-12-28 17:11:53 - chunkserver - INFO - Discovered 1 controller peer(s): ['10.0.1.2:8000']
-2025-12-28 17:11:53 - chunkserver.chunk_index - WARNING - Index file not found at /app/data/chunk_index.json
-2025-12-28 17:11:53 - chunkserver - WARNING - No index file found, starting with empty index
-2025-12-28 17:11:53 - chunkserver - INFO - Starting chunkserver on [::]:50051
