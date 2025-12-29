@@ -55,8 +55,18 @@ class TagService:
         
         with get_db_connection() as conn:
             try:
+                from controller.replication.operation_emitter import emit_tags_added
+
                 for file_id in file_ids:
                     self.tag_repo.add_tags(file_id, new_tags, conn=conn)
+
+                    emit_tags_added(
+                        file_id=file_id,
+                        tags=new_tags,
+                        owner_id=user_id,
+                        conn=conn
+                    )
+
                 conn.commit()
                 logger.info(f"Successfully added tags {new_tags} to {len(file_ids)} files [user_id={user_id}]")
             except Exception as e:
@@ -96,6 +106,8 @@ class TagService:
         
         with get_db_connection() as conn:
             try:
+                from controller.replication.operation_emitter import emit_tags_removed
+
                 for file_id in file_ids:
                     if self.tag_repo.would_become_tagless(file_id, tags_to_remove, conn=conn):
                         file = self.file_repo.get_by_id(file_id)
@@ -109,6 +121,14 @@ class TagService:
                             logger.debug(f"Skipped file {file.name} (would become tagless) [file_id={file_id}]")
                     else:
                         self.tag_repo.delete_tags(file_id, tags_to_remove, conn=conn)
+
+                        emit_tags_removed(
+                            file_id=file_id,
+                            tags=tags_to_remove,
+                            owner_id=user_id,
+                            conn=conn
+                        )
+
                         updated_file_ids.append(file_id)
                 conn.commit()
                 logger.info(

@@ -14,6 +14,7 @@ from common.protocol import (
     GetStateSummaryRequest, StateSummary,
     FetchOperationsRequest, FetchOperationsResponse,
     PushOperationsRequest, PushOperationsResponse,
+    QueryChunkLivenessRequest, QueryChunkLivenessResponse,
     Operation
 )
 from common.constants import CHUNKSERVER_TIMEOUT_SECONDS
@@ -212,6 +213,55 @@ class ReplicationClient:
             raise
         except Exception as e:
             logger.error(f"Unexpected error pushing operations to {peer_address}: {e}", exc_info=True)
+            raise
+
+    async def query_chunk_liveness(
+        self,
+        peer_address: str,
+        chunk_id: str
+    ) -> QueryChunkLivenessResponse:
+        """
+        Query if a chunk is still referenced by any files on the peer.
+
+        Args:
+            peer_address: Peer address in "IP:PORT" format
+            chunk_id: Chunk ID to query
+
+        Returns:
+            QueryChunkLivenessResponse with liveness status
+
+        Raises:
+            grpc.RpcError: If communication fails
+        """
+        try:
+            channel = self._get_channel(peer_address)
+
+            multi_callable = channel.unary_unary(
+                '/replication.ReplicationService/QueryChunkLiveness',
+                request_serializer=lambda x: x,
+                response_deserializer=lambda x: x,
+            )
+
+            request = QueryChunkLivenessRequest(chunk_id=chunk_id)
+            response_bytes = await multi_callable(
+                request.to_json(),
+                timeout=CHUNKSERVER_TIMEOUT_SECONDS
+            )
+
+            response = QueryChunkLivenessResponse.from_json(response_bytes)
+
+            logger.debug(
+                f"Chunk liveness query for {chunk_id} from {peer_address}: "
+                f"is_live={response.is_live}, files={response.referenced_by_files}"
+            )
+
+            return response
+
+        except grpc.RpcError as e:
+            logger.warning(f"Query chunk liveness failed from {peer_address}: {e.code()} - {e.details()}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error querying chunk liveness from {peer_address}: {e}", exc_info=True)
             raise
 
     def _get_channel(self, peer_address: str) -> grpc.aio.Channel:

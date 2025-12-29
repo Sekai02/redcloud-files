@@ -1,7 +1,7 @@
 """
-Operation emitter for capturing user data mutations.
+Operation emitter for capturing controller metadata mutations.
 
-Emits replicable operations when user data changes, incrementing
+Emits replicable operations when controller metadata changes, incrementing
 the local vector clock and storing operations in the operation log.
 """
 
@@ -165,6 +165,270 @@ def emit_api_key_updated(
     logger.info(
         f"Emitted API_KEY_UPDATED operation [operation_id={operation_id}, "
         f"user_id={user_id}]"
+    )
+
+    return operation_id
+
+
+def emit_file_created(
+    file_id: str,
+    name: str,
+    size: int,
+    owner_id: str,
+    created_at: str,
+    tags: list,
+    replaced_file_id: Optional[str] = None,
+    conn: Optional[sqlite3.Connection] = None
+) -> str:
+    """
+    Emit FILE_CREATED operation.
+
+    Args:
+        file_id: UUID of the file
+        name: File name
+        size: File size in bytes
+        owner_id: UUID of the owner
+        created_at: ISO8601 timestamp
+        tags: List of tags
+        replaced_file_id: UUID of replaced file if this is a replacement
+        conn: Optional database connection
+
+    Returns:
+        Operation ID (UUID)
+    """
+    controller_id = get_controller_id()
+    operation_id = str(uuid.uuid4())
+    timestamp_ms = int(datetime.utcnow().timestamp() * 1000)
+
+    vector_clock = get_and_increment_vector_clock(controller_id, conn=conn)
+
+    payload = {
+        "file_id": file_id,
+        "name": name,
+        "size": size,
+        "owner_id": owner_id,
+        "created_at": created_at,
+        "tags": tags,
+        "replaced_file_id": replaced_file_id
+    }
+
+    insert_operation(
+        operation_id=operation_id,
+        operation_type="FILE_CREATED",
+        user_id=owner_id,
+        timestamp_ms=timestamp_ms,
+        vector_clock=vector_clock,
+        payload=payload,
+        applied=1,
+        conn=conn
+    )
+
+    logger.info(
+        f"Emitted FILE_CREATED operation [operation_id={operation_id}, "
+        f"file_id={file_id}, name={name}, owner_id={owner_id}]"
+    )
+
+    return operation_id
+
+
+def emit_file_deleted(
+    file_id: str,
+    owner_id: str,
+    name: str,
+    deleted_at: str,
+    chunk_ids: list,
+    conn: Optional[sqlite3.Connection] = None
+) -> str:
+    """
+    Emit FILE_DELETED operation.
+
+    Args:
+        file_id: UUID of the file
+        owner_id: UUID of the owner
+        name: File name
+        deleted_at: ISO8601 timestamp
+        chunk_ids: List of chunk IDs that were deleted
+        conn: Optional database connection
+
+    Returns:
+        Operation ID (UUID)
+    """
+    controller_id = get_controller_id()
+    operation_id = str(uuid.uuid4())
+    timestamp_ms = int(datetime.utcnow().timestamp() * 1000)
+
+    vector_clock = get_and_increment_vector_clock(controller_id, conn=conn)
+
+    payload = {
+        "file_id": file_id,
+        "owner_id": owner_id,
+        "name": name,
+        "deleted_at": deleted_at,
+        "deleted_by_controller_id": controller_id,
+        "chunk_ids": chunk_ids
+    }
+
+    insert_operation(
+        operation_id=operation_id,
+        operation_type="FILE_DELETED",
+        user_id=owner_id,
+        timestamp_ms=timestamp_ms,
+        vector_clock=vector_clock,
+        payload=payload,
+        applied=1,
+        conn=conn
+    )
+
+    logger.info(
+        f"Emitted FILE_DELETED operation [operation_id={operation_id}, "
+        f"file_id={file_id}, name={name}, owner_id={owner_id}]"
+    )
+
+    return operation_id
+
+
+def emit_tags_added(
+    file_id: str,
+    tags: list,
+    owner_id: str,
+    conn: Optional[sqlite3.Connection] = None
+) -> str:
+    """
+    Emit TAGS_ADDED operation.
+
+    Args:
+        file_id: UUID of the file
+        tags: List of tags to add
+        owner_id: UUID of the file owner
+        conn: Optional database connection
+
+    Returns:
+        Operation ID (UUID)
+    """
+    controller_id = get_controller_id()
+    operation_id = str(uuid.uuid4())
+    timestamp_ms = int(datetime.utcnow().timestamp() * 1000)
+
+    vector_clock = get_and_increment_vector_clock(controller_id, conn=conn)
+
+    payload = {
+        "file_id": file_id,
+        "tags": tags,
+        "owner_id": owner_id
+    }
+
+    insert_operation(
+        operation_id=operation_id,
+        operation_type="TAGS_ADDED",
+        user_id=owner_id,
+        timestamp_ms=timestamp_ms,
+        vector_clock=vector_clock,
+        payload=payload,
+        applied=1,
+        conn=conn
+    )
+
+    logger.info(
+        f"Emitted TAGS_ADDED operation [operation_id={operation_id}, "
+        f"file_id={file_id}, tags={tags}]"
+    )
+
+    return operation_id
+
+
+def emit_tags_removed(
+    file_id: str,
+    tags: list,
+    owner_id: str,
+    conn: Optional[sqlite3.Connection] = None
+) -> str:
+    """
+    Emit TAGS_REMOVED operation.
+
+    Args:
+        file_id: UUID of the file
+        tags: List of tags to remove
+        owner_id: UUID of the file owner
+        conn: Optional database connection
+
+    Returns:
+        Operation ID (UUID)
+    """
+    controller_id = get_controller_id()
+    operation_id = str(uuid.uuid4())
+    timestamp_ms = int(datetime.utcnow().timestamp() * 1000)
+
+    vector_clock = get_and_increment_vector_clock(controller_id, conn=conn)
+
+    payload = {
+        "file_id": file_id,
+        "tags": tags,
+        "owner_id": owner_id
+    }
+
+    insert_operation(
+        operation_id=operation_id,
+        operation_type="TAGS_REMOVED",
+        user_id=owner_id,
+        timestamp_ms=timestamp_ms,
+        vector_clock=vector_clock,
+        payload=payload,
+        applied=1,
+        conn=conn
+    )
+
+    logger.info(
+        f"Emitted TAGS_REMOVED operation [operation_id={operation_id}, "
+        f"file_id={file_id}, tags={tags}]"
+    )
+
+    return operation_id
+
+
+def emit_chunks_created(
+    file_id: str,
+    chunks: list,
+    owner_id: str,
+    conn: Optional[sqlite3.Connection] = None
+) -> str:
+    """
+    Emit CHUNKS_CREATED operation.
+
+    Args:
+        file_id: UUID of the file
+        chunks: List of chunk dictionaries with chunk_id, chunk_index, size, checksum
+        owner_id: UUID of the file owner
+        conn: Optional database connection
+
+    Returns:
+        Operation ID (UUID)
+    """
+    controller_id = get_controller_id()
+    operation_id = str(uuid.uuid4())
+    timestamp_ms = int(datetime.utcnow().timestamp() * 1000)
+
+    vector_clock = get_and_increment_vector_clock(controller_id, conn=conn)
+
+    payload = {
+        "file_id": file_id,
+        "chunks": chunks,
+        "owner_id": owner_id
+    }
+
+    insert_operation(
+        operation_id=operation_id,
+        operation_type="CHUNKS_CREATED",
+        user_id=owner_id,
+        timestamp_ms=timestamp_ms,
+        vector_clock=vector_clock,
+        payload=payload,
+        applied=1,
+        conn=conn
+    )
+
+    logger.info(
+        f"Emitted CHUNKS_CREATED operation [operation_id={operation_id}, "
+        f"file_id={file_id}, chunks_count={len(chunks)}]"
     )
 
     return operation_id
