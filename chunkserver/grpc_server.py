@@ -189,33 +189,38 @@ class ChunkserverServicer:
     ) -> bytes:
         """
         Handle DeleteChunk RPC (unary).
-        Removes chunk file and updates index.
-        
+        Removes chunk file, updates index, and creates tombstone.
+
         Args:
             request_bytes: Serialized DeleteChunkRequest
             context: gRPC context
-            
+
         Returns:
             Serialized DeleteChunkResponse
         """
         try:
             request = DeleteChunkRequest.from_json(request_bytes)
             chunk_id = request.chunk_id
-            
+
             logger.info(f"Deleting chunk {chunk_id}")
-            
+
+            entry = self.chunk_index.get_chunk(chunk_id)
+            checksum = entry.checksum if entry else ""
+
             deleted = delete_chunk(chunk_id)
+
             self.chunk_index.remove_chunk(chunk_id)
-            
+            self.chunk_index.add_tombstone(chunk_id, checksum)
+
             if deleted:
-                logger.info(f"Successfully deleted chunk {chunk_id}")
+                logger.info(f"Successfully deleted chunk {chunk_id} and created tombstone")
                 response = DeleteChunkResponse(success=True)
             else:
-                logger.warning(f"Chunk {chunk_id} not found for deletion")
+                logger.warning(f"Chunk {chunk_id} not found for deletion, created tombstone anyway")
                 response = DeleteChunkResponse(success=True, error_message="Chunk not found")
-            
+
             return response.to_json()
-            
+
         except Exception as e:
             error_msg = f"Error deleting chunk: {str(e)}"
             logger.error(error_msg, exc_info=True)
@@ -244,17 +249,20 @@ class ChunkserverServicer:
 
 def create_server(chunk_index: ChunkIndex) -> aio.Server:
     """
-    Create and configure gRPC server.
-    
+    Create and configure gRPC server with chunk and replication services.
+
     Args:
         chunk_index: ChunkIndex instance
-        
+
     Returns:
         Configured gRPC server
     """
     server = aio.server()
     servicer = ChunkserverServicer(chunk_index)
-    
+
+    from chunkserver.replication.chunk_replication_service import ChunkReplicationServicer
+    replication_servicer = ChunkReplicationServicer(chunk_index)
+
     server.add_generic_rpc_handlers((
         grpc.method_handlers_generic_handler(
             'chunkserver.ChunkserverService',
@@ -281,6 +289,31 @@ def create_server(chunk_index: ChunkIndex) -> aio.Server:
                 ),
             }
         ),
+        grpc.method_handlers_generic_handler(
+            'chunkserver.ChunkReplicationService',
+            {
+                'ChunkGossip': grpc.unary_unary_rpc_method_handler(
+                    replication_servicer.ChunkGossip,
+                    request_deserializer=lambda x: x,
+                    response_serializer=lambda x: x,
+                ),
+                'GetChunkStateSummary': grpc.unary_unary_rpc_method_handler(
+                    replication_servicer.GetChunkStateSummary,
+                    request_deserializer=lambda x: x,
+                    response_serializer=lambda x: x,
+                ),
+                'FetchChunkData': grpc.unary_stream_rpc_method_handler(
+                    replication_servicer.FetchChunkData,
+                    request_deserializer=lambda x: x,
+                    response_serializer=lambda x: x,
+                ),
+                'PushTombstones': grpc.unary_unary_rpc_method_handler(
+                    replication_servicer.PushTombstones,
+                    request_deserializer=lambda x: x,
+                    response_serializer=lambda x: x,
+                ),
+            }
+        ),
     ))
-    
+
     return server
