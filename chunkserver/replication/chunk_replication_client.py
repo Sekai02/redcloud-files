@@ -122,9 +122,12 @@ class ChunkReplicationClient:
 
         metadata = None
         data_buffer = bytearray()
+        message_index = 0
 
         async for response_bytes in multi_callable(request_bytes):
-            if not metadata:
+            message_index += 1
+
+            if message_index == 1:
                 fetch_response = FetchChunkResponse.from_json(response_bytes)
                 if not fetch_response.exists:
                     raise Exception(f"Chunk {chunk_id} not found on peer {peer_address}")
