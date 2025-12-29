@@ -53,15 +53,14 @@ class ChunkReplicationClient:
             grpc.RpcError: If RPC fails
         """
         channel = self._get_channel(peer_address)
-        stub = grpc.aio.UnaryUnaryMultiCallable(
-            channel,
+        multi_callable = channel.unary_unary(
             '/chunkserver.ChunkReplicationService/ChunkGossip',
             request_serializer=lambda x: x,
             response_deserializer=lambda x: x,
         )
 
         request_bytes = message.to_json()
-        response_bytes = await stub(request_bytes)
+        response_bytes = await multi_callable(request_bytes)
 
         return ChunkGossipResponse.from_json(response_bytes)
 
@@ -82,15 +81,14 @@ class ChunkReplicationClient:
             grpc.RpcError: If RPC fails
         """
         channel = self._get_channel(peer_address)
-        stub = grpc.aio.UnaryUnaryMultiCallable(
-            channel,
+        multi_callable = channel.unary_unary(
             '/chunkserver.ChunkReplicationService/GetChunkStateSummary',
             request_serializer=lambda x: x,
             response_deserializer=lambda x: x,
         )
 
         request_bytes = b'{}'
-        response_bytes = await stub(request_bytes)
+        response_bytes = await multi_callable(request_bytes)
 
         return ChunkStateSummary.from_json(response_bytes)
 
@@ -113,8 +111,7 @@ class ChunkReplicationClient:
             grpc.RpcError: If RPC fails
         """
         channel = self._get_channel(peer_address)
-        stub = grpc.aio.UnaryStreamMultiCallable(
-            channel,
+        multi_callable = channel.unary_stream(
             '/chunkserver.ChunkReplicationService/FetchChunkData',
             request_serializer=lambda x: x,
             response_deserializer=lambda x: x,
@@ -126,7 +123,7 @@ class ChunkReplicationClient:
         metadata = None
         data_buffer = bytearray()
 
-        async for response_bytes in stub(request_bytes):
+        async for response_bytes in multi_callable(request_bytes):
             if not metadata:
                 fetch_response = FetchChunkResponse.from_json(response_bytes)
                 if not fetch_response.exists:
@@ -198,8 +195,7 @@ class ChunkReplicationClient:
             grpc.RpcError: If RPC fails
         """
         channel = self._get_channel(peer_address)
-        stub = grpc.aio.UnaryUnaryMultiCallable(
-            channel,
+        multi_callable = channel.unary_unary(
             '/chunkserver.ChunkReplicationService/PushTombstones',
             request_serializer=lambda x: x,
             response_deserializer=lambda x: x,
@@ -208,7 +204,7 @@ class ChunkReplicationClient:
         request = PushTombstonesRequest(tombstones=tombstones)
         request_bytes = request.to_json()
 
-        response_bytes = await stub(request_bytes)
+        response_bytes = await multi_callable(request_bytes)
         response = PushTombstonesResponse.from_json(response_bytes)
 
         return response.success
