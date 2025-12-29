@@ -44,7 +44,11 @@ class ChunkReplicationServicer:
         """
         self.chunk_index = chunk_index
 
-    async def ChunkGossip(self, request_bytes: bytes) -> bytes:
+    async def ChunkGossip(
+        self,
+        request_bytes: bytes,
+        context: grpc.aio.ServicerContext
+    ) -> bytes:
         """
         Handle incoming chunk gossip message.
 
@@ -104,7 +108,11 @@ class ChunkReplicationServicer:
             logger.error(f"Error processing chunk gossip: {e}", exc_info=True)
             raise
 
-    async def GetChunkStateSummary(self, request_bytes: bytes) -> bytes:
+    async def GetChunkStateSummary(
+        self,
+        request_bytes: bytes,
+        context: grpc.aio.ServicerContext
+    ) -> bytes:
         """
         Handle state summary request for anti-entropy.
 
@@ -222,7 +230,11 @@ class ChunkReplicationServicer:
                 f"Error fetching chunk: {str(e)}"
             )
 
-    async def PushTombstones(self, request_bytes: bytes) -> bytes:
+    async def PushTombstones(
+        self,
+        request_bytes: bytes,
+        context: grpc.aio.ServicerContext
+    ) -> bytes:
         """
         Handle incoming tombstone push.
 
