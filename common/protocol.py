@@ -545,3 +545,272 @@ class QueryChunkLivenessResponse:
             is_live=obj['is_live'],
             referenced_by_files=obj['referenced_by_files']
         )
+
+
+@dataclass
+class ChunkSummary:
+    """Lightweight chunk metadata for gossip protocol."""
+    chunk_id: str
+    checksum: str
+    size: int
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'chunk_id': self.chunk_id,
+            'checksum': self.checksum,
+            'size': self.size
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'ChunkSummary':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(
+            chunk_id=obj['chunk_id'],
+            checksum=obj['checksum'],
+            size=obj['size']
+        )
+
+
+@dataclass
+class TombstoneEntry:
+    """Represents a deleted chunk to prevent resurrection after partitions."""
+    chunk_id: str
+    deleted_at: str
+    checksum: str
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'chunk_id': self.chunk_id,
+            'deleted_at': self.deleted_at,
+            'checksum': self.checksum
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'TombstoneEntry':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(
+            chunk_id=obj['chunk_id'],
+            deleted_at=obj['deleted_at'],
+            checksum=obj['checksum']
+        )
+
+
+@dataclass
+class ChunkGossipMessage:
+    """Gossip message exchanged between chunkserver peers."""
+    sender_address: str
+    chunk_summaries: List[ChunkSummary]
+    tombstones: List[TombstoneEntry]
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'sender_address': self.sender_address,
+            'chunk_summaries': [
+                {
+                    'chunk_id': cs.chunk_id,
+                    'checksum': cs.checksum,
+                    'size': cs.size
+                }
+                for cs in self.chunk_summaries
+            ],
+            'tombstones': [
+                {
+                    'chunk_id': ts.chunk_id,
+                    'deleted_at': ts.deleted_at,
+                    'checksum': ts.checksum
+                }
+                for ts in self.tombstones
+            ]
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'ChunkGossipMessage':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(
+            sender_address=obj['sender_address'],
+            chunk_summaries=[
+                ChunkSummary(
+                    chunk_id=cs['chunk_id'],
+                    checksum=cs['checksum'],
+                    size=cs['size']
+                )
+                for cs in obj['chunk_summaries']
+            ],
+            tombstones=[
+                TombstoneEntry(
+                    chunk_id=ts['chunk_id'],
+                    deleted_at=ts['deleted_at'],
+                    checksum=ts['checksum']
+                )
+                for ts in obj['tombstones']
+            ]
+        )
+
+
+@dataclass
+class ChunkGossipResponse:
+    """Response to chunk gossip message indicating missing chunks."""
+    peer_address: str
+    missing_chunk_ids: List[str]
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'peer_address': self.peer_address,
+            'missing_chunk_ids': self.missing_chunk_ids
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'ChunkGossipResponse':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(
+            peer_address=obj['peer_address'],
+            missing_chunk_ids=obj['missing_chunk_ids']
+        )
+
+
+@dataclass
+class ChunkStateSummary:
+    """Complete state summary for anti-entropy reconciliation."""
+    peer_address: str
+    chunk_ids: List[str]
+    tombstone_ids: List[str]
+    chunk_count: int
+    total_size_bytes: int
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'peer_address': self.peer_address,
+            'chunk_ids': self.chunk_ids,
+            'tombstone_ids': self.tombstone_ids,
+            'chunk_count': self.chunk_count,
+            'total_size_bytes': self.total_size_bytes
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'ChunkStateSummary':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(
+            peer_address=obj['peer_address'],
+            chunk_ids=obj['chunk_ids'],
+            tombstone_ids=obj['tombstone_ids'],
+            chunk_count=obj['chunk_count'],
+            total_size_bytes=obj['total_size_bytes']
+        )
+
+
+@dataclass
+class FetchChunkRequest:
+    """Request to fetch specific chunk data from peer for replication."""
+    chunk_id: str
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({'chunk_id': self.chunk_id}).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'FetchChunkRequest':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(chunk_id=obj['chunk_id'])
+
+
+@dataclass
+class FetchChunkResponse:
+    """Response containing chunk metadata for replication transfer."""
+    chunk_id: str
+    checksum: str
+    size: int
+    exists: bool
+    error_message: Optional[str] = None
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'chunk_id': self.chunk_id,
+            'checksum': self.checksum,
+            'size': self.size,
+            'exists': self.exists,
+            'error_message': self.error_message
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'FetchChunkResponse':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(
+            chunk_id=obj['chunk_id'],
+            checksum=obj['checksum'],
+            size=obj['size'],
+            exists=obj['exists'],
+            error_message=obj.get('error_message')
+        )
+
+
+@dataclass
+class PushTombstonesRequest:
+    """Request to push deletion tombstones to peer."""
+    tombstones: List[TombstoneEntry]
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'tombstones': [
+                {
+                    'chunk_id': ts.chunk_id,
+                    'deleted_at': ts.deleted_at,
+                    'checksum': ts.checksum
+                }
+                for ts in self.tombstones
+            ]
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'PushTombstonesRequest':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(
+            tombstones=[
+                TombstoneEntry(
+                    chunk_id=ts['chunk_id'],
+                    deleted_at=ts['deleted_at'],
+                    checksum=ts['checksum']
+                )
+                for ts in obj['tombstones']
+            ]
+        )
+
+
+@dataclass
+class PushTombstonesResponse:
+    """Response to tombstone push operation."""
+    success: bool
+    processed_count: int
+    error_message: Optional[str] = None
+
+    def to_json(self) -> bytes:
+        """Serialize to JSON bytes."""
+        return json.dumps({
+            'success': self.success,
+            'processed_count': self.processed_count,
+            'error_message': self.error_message
+        }).encode('utf-8')
+
+    @classmethod
+    def from_json(cls, data: bytes) -> 'PushTombstonesResponse':
+        """Deserialize from JSON bytes."""
+        obj = json.loads(data)
+        return cls(
+            success=obj['success'],
+            processed_count=obj['processed_count'],
+            error_message=obj.get('error_message')
+        )

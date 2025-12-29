@@ -17,7 +17,7 @@ logger = setup_logging('chunkserver')
 
 async def serve(chunk_index: ChunkIndex) -> None:
     """
-    Start and run gRPC server.
+    Start and run gRPC server with replication managers.
 
     Args:
         chunk_index: Initialized ChunkIndex instance
@@ -29,11 +29,24 @@ async def serve(chunk_index: ChunkIndex) -> None:
     logger.info(f"Starting chunkserver on {listen_addr}")
     await server.start()
 
+    from chunkserver.replication.chunk_gossip_manager import ChunkGossipManager
+    from chunkserver.replication.chunk_anti_entropy_manager import ChunkAntiEntropyManager
+
+    gossip_manager = ChunkGossipManager(chunk_index)
+    await gossip_manager.start()
+
+    anti_entropy_manager = ChunkAntiEntropyManager(chunk_index, gossip_manager)
+    await anti_entropy_manager.start()
+
     async def shutdown(sig=None):
         if sig:
             logger.info(f"Received signal {sig}, shutting down...")
         else:
             logger.info("Shutting down...")
+
+        await anti_entropy_manager.stop()
+        await gossip_manager.stop()
+
         await server.stop(5)
         chunk_index.save_to_disk()
         logger.info("Chunkserver stopped")
