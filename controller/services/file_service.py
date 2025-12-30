@@ -12,7 +12,7 @@ from controller.repositories.file_repository import FileRepository, File
 from controller.repositories.tag_repository import TagRepository
 from controller.repositories.chunk_repository import ChunkRepository, Chunk
 from controller.database import get_db_connection
-from controller.exceptions import FileNotFoundError, UnauthorizedAccessError, EmptyTagListError
+from controller.exceptions import FileNotFoundError, UnauthorizedAccessError, EmptyTagListError, ChunkserverUnavailableError
 from controller.domain import FileMetadata
 from controller.chunkserver_client import ChunkserverClient
 from common.types import ChunkDescriptor
@@ -269,6 +269,7 @@ class FileService:
         async def stream_file_data():
             total_chunks = len(chunks)
             bytes_streamed = 0
+            max_retries = 5
 
             logger.info(f"Starting download of file {file_id} ({total_chunks} chunks, {file.size} bytes)")
 
@@ -276,22 +277,59 @@ class FileService:
                 chunk_num = chunk.chunk_index + 1
                 logger.info(f"Streaming chunk {chunk_num}/{total_chunks} (chunk_id={chunk.chunk_id})")
 
-                try:
-                    async for piece in self.chunkserver_client.read_chunk(chunk.chunk_id):
-                        bytes_streamed += len(piece)
-                        yield piece
-                except FileNotFoundError:
-                    logger.error(
-                        f"Chunk {chunk.chunk_id} (index {chunk.chunk_index}) not found on chunkserver. "
-                        f"Downloaded {bytes_streamed}/{file.size} bytes before failure."
-                    )
-                    raise
-                except Exception as e:
-                    logger.error(
-                        f"Error streaming chunk {chunk.chunk_id} (index {chunk.chunk_index}): {e}. "
-                        f"Downloaded {bytes_streamed}/{file.size} bytes before failure."
-                    )
-                    raise
+                chunk_retrieved = False
+
+                for attempt in range(max_retries + 1):
+                    try:
+                        async for piece in self.chunkserver_client.read_chunk(chunk.chunk_id):
+                            bytes_streamed += len(piece)
+                            yield piece
+
+                        chunk_retrieved = True
+                        break
+
+                    except FileNotFoundError:
+                        if attempt < max_retries:
+                            delay = 2 ** attempt
+                            logger.warning(
+                                f"Chunk {chunk.chunk_id} (index {chunk.chunk_index}) not found on chunkserver "
+                                f"(attempt {attempt + 1}/{max_retries + 1}). "
+                                f"Waiting {delay}s before retry (chunk may be replicating)..."
+                            )
+                            await asyncio.sleep(delay)
+                        else:
+                            logger.error(
+                                f"Chunk {chunk.chunk_id} (index {chunk.chunk_index}) not found after {max_retries + 1} attempts. "
+                                f"Downloaded {bytes_streamed}/{file.size} bytes before failure."
+                            )
+                            raise
+
+                    except ChunkserverUnavailableError:
+                        if attempt < max_retries:
+                            delay = 2 ** attempt
+                            logger.warning(
+                                f"Chunkserver unavailable for chunk {chunk.chunk_id} "
+                                f"(attempt {attempt + 1}/{max_retries + 1}). "
+                                f"Waiting {delay}s before retry..."
+                            )
+                            await asyncio.sleep(delay)
+                        else:
+                            logger.error(
+                                f"Chunkserver unavailable after {max_retries + 1} attempts. "
+                                f"Downloaded {bytes_streamed}/{file.size} bytes before failure."
+                            )
+                            raise
+
+                    except Exception as e:
+                        logger.error(
+                            f"Unexpected error streaming chunk {chunk.chunk_id} (index {chunk.chunk_index}): {e}. "
+                            f"Downloaded {bytes_streamed}/{file.size} bytes before failure.",
+                            exc_info=True
+                        )
+                        raise
+
+                if not chunk_retrieved:
+                    raise FileNotFoundError(f"Failed to retrieve chunk {chunk.chunk_id} after retries")
 
             logger.info(f"Successfully streamed file {file_id}: {bytes_streamed} bytes total")
 
