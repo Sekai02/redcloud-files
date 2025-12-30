@@ -10,7 +10,7 @@ import httpx
 from common.logging_config import get_logger
 from cli.config import Config
 from cli.utils import format_file_size, ProgressFileWrapper
-from cli.constants import GREEN, RESET
+from cli.constants import GREEN, YELLOW, RESET
 
 logger = get_logger(__name__)
 
@@ -654,38 +654,58 @@ class ControllerClient:
 
         try:
             url = f'/files/by-name/{filename}/download'
-            
+
+            print(f"{YELLOW}Download may take a moment...{RESET}")
+
             with self.session.stream('GET', url, headers=headers) as response:
                 if response.status_code == 200:
                     output_file, error = self._normalize_download_path(output_path or "", filename)
-                    
+
                     if error:
                         response.read()
                         return f"Error: {error}"
-                    
+
                     total_size = int(response.headers.get('Content-Length', 0))
                     downloaded = 0
-                    
+                    last_progress_time = time.time()
+                    stall_threshold = 3
+
                     with open(output_file, 'wb') as f:
                         for chunk in response.iter_bytes(chunk_size=8192):
                             f.write(chunk)
                             downloaded += len(chunk)
-                            
+
+                            current_time = time.time()
+                            time_since_last_progress = current_time - last_progress_time
+
                             if total_size > 0:
                                 progress = (downloaded / total_size) * 100
-                                sys.stdout.write(
-                                    f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({GREEN}{progress:.1f}%{RESET})"
-                                )
+
+                                if time_since_last_progress > stall_threshold:
+                                    sys.stdout.write(
+                                        f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({progress:.1f}%) {YELLOW}- Retrieving data...{RESET}"
+                                    )
+                                else:
+                                    sys.stdout.write(
+                                        f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({GREEN}{progress:.1f}%{RESET})"
+                                    )
                                 sys.stdout.flush()
                             else:
-                                sys.stdout.write(
-                                    f"\rDownloading {filename}: {format_file_size(downloaded)}"
-                                )
+                                if time_since_last_progress > stall_threshold:
+                                    sys.stdout.write(
+                                        f"\rDownloading {filename}: {format_file_size(downloaded)} {YELLOW}- Retrieving data...{RESET}"
+                                    )
+                                else:
+                                    sys.stdout.write(
+                                        f"\rDownloading {filename}: {format_file_size(downloaded)}"
+                                    )
                                 sys.stdout.flush()
-                    
+
+                            last_progress_time = current_time
+
                     sys.stdout.write('\n')
                     sys.stdout.flush()
-                    
+
                     if total_size > 0:
                         return f"Downloaded: {filename} ({format_file_size(total_size)})\nSaved to: {output_file.absolute()}"
                     else:
