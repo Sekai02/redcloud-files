@@ -225,3 +225,7 @@ data/
 # Uploads and Downloads
 uploads/
 downloads/
+
+# Logs
+logs/
+*.log

@@ -338,13 +338,3 @@ class ChunkserverClient:
         except Exception as e:
             logger.warning(f"Ping failed: {e}")
             return False
-    
-    async def get_stats(self) -> dict:
-        """
-        Get storage statistics from chunkserver.
-        
-        Returns:
-            Dictionary with storage statistics (optional feature)
-        """
-        raise NotImplementedError("GetStats RPC not yet implemented")
-

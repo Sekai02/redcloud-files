@@ -13,6 +13,10 @@ from controller.database import init_database
 from controller.routes.auth_routes import router as auth_router
 from controller.routes.file_routes import router as file_router
 from controller.cleanup_task import OrphanedChunkCleaner
+from controller.replication.grpc_server import ReplicationServer
+from controller.replication.gossip_manager import GossipManager
+from controller.replication.anti_entropy_manager import AntiEntropyManager
+from controller.replication.chunk_gc_manager import ChunkGCManager
 from controller.exceptions import (
     DFSException,
     UserAlreadyExistsError,
@@ -35,6 +39,10 @@ app = FastAPI(
 )
 
 cleanup_task = OrphanedChunkCleaner()
+replication_server = ReplicationServer()
+gossip_manager = GossipManager()
+anti_entropy_manager = AntiEntropyManager(gossip_manager)
+chunk_gc_manager = ChunkGCManager(gossip_manager)
 
 
 @app.middleware("http")
@@ -75,8 +83,25 @@ async def startup_event():
     logger.info("Controller service starting up...")
     init_database()
     logger.info("Database initialized")
+
+    await replication_server.start()
+    logger.info("Replication gRPC server started")
+
+    await gossip_manager.start()
+    logger.info("Gossip manager started")
+
+    await anti_entropy_manager.start()
+    logger.info("Anti-entropy manager started")
+
+    await chunk_gc_manager.start()
+    logger.info("Chunk GC manager started")
+
     await cleanup_task.start()
     logger.info("Background cleanup task started")
+
+    from controller.replication.operation_applier import start_deferred_operations_manager
+    asyncio.create_task(start_deferred_operations_manager())
+    logger.info("Deferred operations retry manager started")
 
 
 @app.on_event("shutdown")
@@ -85,6 +110,19 @@ async def shutdown_event():
     Cleanup resources on application shutdown.
     """
     logger.info("Controller service shutting down...")
+
+    await chunk_gc_manager.stop()
+    logger.info("Chunk GC manager stopped")
+
+    await anti_entropy_manager.stop()
+    logger.info("Anti-entropy manager stopped")
+
+    await gossip_manager.stop()
+    logger.info("Gossip manager stopped")
+
+    await replication_server.stop()
+    logger.info("Replication gRPC server stopped")
+
     await cleanup_task.stop()
     logger.info("Cleanup task stopped")
 
@@ -289,6 +327,28 @@ def main() -> None:
     """
     Start the FastAPI server with uvicorn.
     """
+    from common.dns_discovery import discover_chunkserver_peers
+    from common.constants import CHUNKSERVER_SERVICE_NAME
+
+    logger.info("Discovering chunkserver peers via DNS...")
+
+    try:
+        peers = discover_chunkserver_peers()
+        if peers:
+            logger.info(f"Discovered {len(peers)} chunkserver peer(s): {peers}")
+        else:
+            logger.warning(
+                f"No chunkserver peers found via DNS alias '{CHUNKSERVER_SERVICE_NAME}'. "
+                f"Controller will start but file operations will fail until chunkservers are available."
+            )
+    except Exception as e:
+        logger.warning(
+            f"DNS discovery failed for '{CHUNKSERVER_SERVICE_NAME}': {e}. "
+            f"Controller will start but file operations will fail until chunkservers are available."
+        )
+
+    logger.info("Starting controller...")
+
     uvicorn.run(
         "controller.main:app",
         host=CONTROLLER_HOST,

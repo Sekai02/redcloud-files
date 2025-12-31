@@ -18,3 +18,7 @@ CHECKSUM_ALGORITHM: str = "sha256"
 
 DEFAULT_CHUNK_STORAGE_PATH: str = "/app/data/chunks"
 DEFAULT_CHUNK_INDEX_PATH: str = "/app/data/chunk_index.json"
+
+REPLICATION_PORT: int = 8001
+GOSSIP_INTERVAL_SECONDS: int = 2
+ANTI_ENTROPY_INTERVAL_SECONDS: int = 30
