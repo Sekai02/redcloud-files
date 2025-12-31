@@ -1,0 +1,361 @@
+"""Entry point for the Controller service."""
+
+import uvicorn
+import asyncio
+import time
+import uuid
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
+
+from common.logging_config import setup_logging, get_logger
+from controller.config import CONTROLLER_HOST, CONTROLLER_PORT
+from controller.database import init_database
+from controller.routes.auth_routes import router as auth_router
+from controller.routes.file_routes import router as file_router
+from controller.cleanup_task import OrphanedChunkCleaner
+from controller.replication.grpc_server import ReplicationServer
+from controller.replication.gossip_manager import GossipManager
+from controller.replication.anti_entropy_manager import AntiEntropyManager
+from controller.replication.chunk_gc_manager import ChunkGCManager
+from controller.exceptions import (
+    DFSException,
+    UserAlreadyExistsError,
+    InvalidCredentialsError,
+    InvalidAPIKeyError,
+    FileNotFoundError,
+    UnauthorizedAccessError,
+    ChunkserverUnavailableError,
+    InvalidTagQueryError,
+    StorageFullError,
+    ChecksumMismatchError
+)
+
+logger = setup_logging('controller')
+
+app = FastAPI(
+    title="RedCloud Files Controller",
+    description="Centralized tag-based file system controller server",
+    version="1.0.0"
+)
+
+cleanup_task = OrphanedChunkCleaner()
+replication_server = ReplicationServer()
+gossip_manager = GossipManager()
+anti_entropy_manager = AntiEntropyManager(gossip_manager)
+chunk_gc_manager = ChunkGCManager(gossip_manager)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """
+    Middleware to log all HTTP requests and responses.
+    """
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    
+    start_time = time.time()
+    
+    user_id = getattr(request.state, 'user_id', None)
+    
+    logger.info(
+        f"Request started: {request.method} {request.url.path} [request_id={request_id}] [user_id={user_id or 'anonymous'}]"
+    )
+    
+    response = await call_next(request)
+    
+    duration = time.time() - start_time
+    
+    logger.info(
+        f"Request completed: {request.method} {request.url.path} "
+        f"status={response.status_code} duration={duration:.3f}s [request_id={request_id}]"
+    )
+    
+    response.headers["X-Request-ID"] = request_id
+    
+    return response
+
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    Initialize database and start background tasks on application startup.
+    """
+    logger.info("Controller service starting up...")
+    init_database()
+    logger.info("Database initialized")
+
+    await replication_server.start()
+    logger.info("Replication gRPC server started")
+
+    await gossip_manager.start()
+    logger.info("Gossip manager started")
+
+    await anti_entropy_manager.start()
+    logger.info("Anti-entropy manager started")
+
+    await chunk_gc_manager.start()
+    logger.info("Chunk GC manager started")
+
+    await cleanup_task.start()
+    logger.info("Background cleanup task started")
+
+    from controller.replication.operation_applier import start_deferred_operations_manager
+    asyncio.create_task(start_deferred_operations_manager())
+    logger.info("Deferred operations retry manager started")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    Cleanup resources on application shutdown.
+    """
+    logger.info("Controller service shutting down...")
+
+    await chunk_gc_manager.stop()
+    logger.info("Chunk GC manager stopped")
+
+    await anti_entropy_manager.stop()
+    logger.info("Anti-entropy manager stopped")
+
+    await gossip_manager.stop()
+    logger.info("Gossip manager stopped")
+
+    await replication_server.stop()
+    logger.info("Replication gRPC server stopped")
+
+    await cleanup_task.stop()
+    logger.info("Cleanup task stopped")
+
+
+@app.exception_handler(UserAlreadyExistsError)
+async def user_already_exists_handler(request: Request, exc: UserAlreadyExistsError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"User already exists error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc), "code": "USER_ALREADY_EXISTS"}
+    )
+
+
+@app.exception_handler(InvalidCredentialsError)
+async def invalid_credentials_handler(request: Request, exc: InvalidCredentialsError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"Invalid credentials error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={"detail": str(exc), "code": "INVALID_CREDENTIALS"}
+    )
+
+
+@app.exception_handler(InvalidAPIKeyError)
+async def invalid_api_key_handler(request: Request, exc: InvalidAPIKeyError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"Invalid API key error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={"detail": str(exc), "code": "INVALID_API_KEY"}
+    )
+
+
+@app.exception_handler(FileNotFoundError)
+async def file_not_found_handler(request: Request, exc: FileNotFoundError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"File not found error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"detail": str(exc), "code": "FILE_NOT_FOUND"}
+    )
+
+
+@app.exception_handler(UnauthorizedAccessError)
+async def unauthorized_access_handler(request: Request, exc: UnauthorizedAccessError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    user_id = getattr(request.state, 'user_id', 'unknown')
+    logger.warning(
+        f"Unauthorized access error: {exc} [request_id={request_id}] [user_id={user_id}] path={request.url.path}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={"detail": str(exc), "code": "UNAUTHORIZED_ACCESS"}
+    )
+
+
+@app.exception_handler(ChunkserverUnavailableError)
+async def chunkserver_unavailable_handler(request: Request, exc: ChunkserverUnavailableError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"Chunkserver unavailable error: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": str(exc), "code": "CHUNKSERVER_UNAVAILABLE"}
+    )
+
+
+@app.exception_handler(InvalidTagQueryError)
+async def invalid_tag_query_handler(request: Request, exc: InvalidTagQueryError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.warning(
+        f"Invalid tag query error: {exc} [request_id={request_id}] path={request.url.path}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc), "code": "INVALID_TAG_QUERY"}
+    )
+
+
+@app.exception_handler(StorageFullError)
+async def storage_full_handler(request: Request, exc: StorageFullError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"Storage full error: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
+    return JSONResponse(
+        status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+        content={"detail": str(exc), "code": "STORAGE_FULL"}
+    )
+
+
+@app.exception_handler(ChecksumMismatchError)
+async def checksum_mismatch_handler(request: Request, exc: ChecksumMismatchError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"Checksum mismatch error: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": str(exc), "code": "CHECKSUM_MISMATCH"}
+    )
+
+
+@app.exception_handler(DFSException)
+async def dfs_exception_handler(request: Request, exc: DFSException):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"DFS exception: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": str(exc), "code": "INTERNAL_ERROR"}
+    )
+
+
+@app.exception_handler(NotImplementedError)
+async def not_implemented_handler(request: Request, exc: NotImplementedError):
+    request_id = getattr(request.state, 'request_id', 'unknown')
+    logger.error(
+        f"Not implemented error: {exc} [request_id={request_id}] path={request.url.path}",
+        exc_info=True
+    )
+    return JSONResponse(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        content={"detail": str(exc), "code": "NOT_IMPLEMENTED"}
+    )
+
+
+app.include_router(auth_router)
+app.include_router(file_router)
+
+
+@app.get("/")
+async def root():
+    """
+    Root endpoint for health check.
+    """
+    return {"message": "RedCloud Files Controller API", "status": "running"}
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for Docker healthcheck.
+    Returns 200 if service is alive.
+    """
+    return {"status": "healthy", "service": "controller"}
+
+
+@app.get("/ready")
+async def ready_check():
+    """
+    Readiness check endpoint.
+    Verifies database and chunkserver connectivity.
+    """
+    from controller.database import get_db_connection
+    from controller.chunkserver_client import ChunkserverClient
+    
+    try:
+        conn = get_db_connection()
+        conn.close()
+        db_status = "ok"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
+    try:
+        client = ChunkserverClient()
+        await client.ping()
+        await client.close()
+        chunkserver_status = "ok"
+    except Exception as e:
+        chunkserver_status = f"error: {str(e)}"
+    
+    ready = db_status == "ok" and chunkserver_status == "ok"
+    status_code = status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE
+    
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ready": ready,
+            "database": db_status,
+            "chunkserver": chunkserver_status
+        }
+    )
+
+
+def main() -> None:
+    """
+    Start the FastAPI server with uvicorn.
+    """
+    from common.dns_discovery import discover_chunkserver_peers
+    from common.constants import CHUNKSERVER_SERVICE_NAME
+
+    logger.info("Discovering chunkserver peers via DNS...")
+
+    try:
+        peers = discover_chunkserver_peers()
+        if peers:
+            logger.info(f"Discovered {len(peers)} chunkserver peer(s): {peers}")
+        else:
+            logger.warning(
+                f"No chunkserver peers found via DNS alias '{CHUNKSERVER_SERVICE_NAME}'. "
+                f"Controller will start but file operations will fail until chunkservers are available."
+            )
+    except Exception as e:
+        logger.warning(
+            f"DNS discovery failed for '{CHUNKSERVER_SERVICE_NAME}': {e}. "
+            f"Controller will start but file operations will fail until chunkservers are available."
+        )
+
+    logger.info("Starting controller...")
+
+    uvicorn.run(
+        "controller.main:app",
+        host=CONTROLLER_HOST,
+        port=CONTROLLER_PORT,
+        reload=True
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,12 @@
+#!/bin/bash
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
+
+echo "Starting RedCloud Files Controller..."
+echo "Port: 8000"
+echo "Database: ./data/metadata.db"
+echo "Hot reload: enabled"
+echo ""
+
+exec python3 -m uvicorn controller.main:app --host 0.0.0.0 --port 8000 --reload

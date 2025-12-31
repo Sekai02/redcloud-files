@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY common/ ./common/
+COPY cli/ ./cli/
+
+RUN mkdir -p /uploads /downloads
+RUN chmod 777 /uploads /downloads
+
+VOLUME /uploads
+VOLUME /downloads
+
+WORKDIR /uploads
+
+ENV LOG_LEVEL=INFO
+
+CMD ["python", "-m", "cli.main"]
