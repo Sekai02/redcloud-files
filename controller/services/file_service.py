@@ -111,13 +111,6 @@ class FileService:
                         for chunk in chunks_metadata
                     ]
 
-                    emit_chunks_created(
-                        file_id=file_id,
-                        chunks=chunks_payload,
-                        owner_id=owner_id,
-                        conn=conn
-                    )
-
                     emit_file_created(
                         file_id=file_id,
                         name=file_name,
@@ -126,6 +119,13 @@ class FileService:
                         created_at=created_at.isoformat(),
                         tags=tags,
                         replaced_file_id=replaced_file_id,
+                        conn=conn
+                    )
+
+                    emit_chunks_created(
+                        file_id=file_id,
+                        chunks=chunks_payload,
+                        owner_id=owner_id,
                         conn=conn
                     )
 

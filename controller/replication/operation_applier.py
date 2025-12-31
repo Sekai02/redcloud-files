@@ -7,8 +7,10 @@ conflict resolution strategies.
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Set, Dict
 from datetime import datetime
+from collections import defaultdict
+import asyncio
 
 from common.protocol import Operation
 from controller.database import get_db_connection
@@ -20,6 +22,96 @@ from controller.replication.operation_log import (
 from controller.replication.vector_clock import VectorClock
 
 logger = logging.getLogger(__name__)
+
+_deferred_operations: Dict[str, Operation] = {}
+_operation_dependencies: Dict[str, Set[str]] = defaultdict(set)
+_lock = asyncio.Lock()
+
+
+class DependencyNotMetError(Exception):
+    """
+    Exception raised when an operation's dependency is not met.
+
+    Args:
+        dependency_description: Human-readable description of the dependency
+        required_dependency: Key identifying the dependency (e.g., "file:uuid")
+    """
+    def __init__(self, dependency_description: str, required_dependency: str):
+        self.dependency_description = dependency_description
+        self.required_dependency = required_dependency
+        super().__init__(dependency_description)
+
+
+async def _defer_operation(operation: Operation, required_dependency: str):
+    """
+    Defer an operation until its dependency is satisfied.
+
+    Args:
+        operation: Operation to defer
+        required_dependency: Key identifying the required dependency
+    """
+    async with _lock:
+        _deferred_operations[operation.operation_id] = operation
+        _operation_dependencies[required_dependency].add(operation.operation_id)
+
+        logger.info(
+            f"Deferred operation {operation.operation_id} "
+            f"(type={operation.operation_type}) waiting for dependency: {required_dependency}"
+        )
+
+
+async def _check_and_apply_deferred_operations(applied_operation: Operation):
+    """
+    Check if any deferred operations can now be applied based on the just-applied operation.
+
+    Args:
+        applied_operation: Operation that was just successfully applied
+    """
+    async with _lock:
+        dependency_key = _get_dependency_key(applied_operation)
+
+        if dependency_key not in _operation_dependencies:
+            return
+
+        waiting_operation_ids = _operation_dependencies.pop(dependency_key)
+
+        operations_to_retry = []
+        for op_id in waiting_operation_ids:
+            deferred_op = _deferred_operations.pop(op_id, None)
+            if deferred_op:
+                operations_to_retry.append(deferred_op)
+
+    for operation in operations_to_retry:
+        logger.info(
+            f"Retrying deferred operation {operation.operation_id} "
+            f"(dependency {dependency_key} now satisfied)"
+        )
+
+        try:
+            await apply_operation(operation)
+        except Exception as e:
+            logger.error(
+                f"Failed to apply deferred operation {operation.operation_id}: {e}",
+                exc_info=True
+            )
+
+
+def _get_dependency_key(operation: Operation) -> str:
+    """
+    Get the dependency key that this operation satisfies.
+
+    Args:
+        operation: Operation to extract dependency key from
+
+    Returns:
+        Dependency key string (e.g., "file:uuid" or "user:uuid"), or empty string
+    """
+    if operation.operation_type == "FILE_CREATED":
+        return f"file:{operation.payload['file_id']}"
+    elif operation.operation_type == "USER_CREATED":
+        return f"user:{operation.payload['user_id']}"
+
+    return ""
 
 
 async def apply_operation(operation: Operation) -> bool:
@@ -43,22 +135,35 @@ async def apply_operation(operation: Operation) -> bool:
     if not existing:
         _store_operation(operation)
 
-    if operation.operation_type == "USER_CREATED":
-        return await _apply_user_created(operation)
-    elif operation.operation_type == "API_KEY_UPDATED":
-        return await _apply_api_key_updated(operation)
-    elif operation.operation_type == "FILE_CREATED":
-        return await _apply_file_created(operation)
-    elif operation.operation_type == "FILE_DELETED":
-        return await _apply_file_deleted(operation)
-    elif operation.operation_type == "TAGS_ADDED":
-        return await _apply_tags_added(operation)
-    elif operation.operation_type == "TAGS_REMOVED":
-        return await _apply_tags_removed(operation)
-    elif operation.operation_type == "CHUNKS_CREATED":
-        return await _apply_chunks_created(operation)
-    else:
-        logger.warning(f"Unknown operation type: {operation.operation_type}")
+    try:
+        if operation.operation_type == "USER_CREATED":
+            success = await _apply_user_created(operation)
+        elif operation.operation_type == "API_KEY_UPDATED":
+            success = await _apply_api_key_updated(operation)
+        elif operation.operation_type == "FILE_CREATED":
+            success = await _apply_file_created(operation)
+        elif operation.operation_type == "FILE_DELETED":
+            success = await _apply_file_deleted(operation)
+        elif operation.operation_type == "TAGS_ADDED":
+            success = await _apply_tags_added(operation)
+        elif operation.operation_type == "TAGS_REMOVED":
+            success = await _apply_tags_removed(operation)
+        elif operation.operation_type == "CHUNKS_CREATED":
+            success = await _apply_chunks_created(operation)
+        else:
+            logger.warning(f"Unknown operation type: {operation.operation_type}")
+            return False
+
+        if success:
+            await _check_and_apply_deferred_operations(operation)
+
+        return success
+
+    except DependencyNotMetError as e:
+        logger.info(
+            f"Operation {operation.operation_id} deferred: {e.dependency_description}"
+        )
+        await _defer_operation(operation, e.required_dependency)
         return False
 
 
@@ -211,12 +316,14 @@ async def _apply_api_key_updated(operation: Operation) -> bool:
         user_row = cursor.fetchone()
 
         if not user_row:
-            logger.warning(
-                f"User {user_id} not found for API_KEY_UPDATED operation, skipping"
+            logger.info(
+                f"User {user_id} not found for API_KEY_UPDATED operation, deferring"
             )
-            mark_operation_applied(operation.operation_id, conn=conn)
-            conn.commit()
-            return False
+
+            raise DependencyNotMetError(
+                dependency_description=f"User {user_id} must exist before API key can be updated",
+                required_dependency=f"user:{user_id}"
+            )
 
         current_api_key = user_row[0]
         current_key_updated_at = user_row[1]
@@ -578,12 +685,14 @@ async def _apply_tags_added(operation: Operation) -> bool:
 
         cursor.execute("SELECT file_id FROM files WHERE file_id = ?", (file_id,))
         if not cursor.fetchone():
-            logger.warning(
-                f"File {file_id} not found for TAGS_ADDED operation, skipping"
+            logger.info(
+                f"File {file_id} not found for TAGS_ADDED operation, deferring"
             )
-            mark_operation_applied(operation.operation_id, conn=conn)
-            conn.commit()
-            return False
+
+            raise DependencyNotMetError(
+                dependency_description=f"File {file_id} must exist before tags can be added",
+                required_dependency=f"file:{file_id}"
+            )
 
         for tag in tags:
             cursor.execute(
@@ -622,12 +731,14 @@ async def _apply_tags_removed(operation: Operation) -> bool:
 
         cursor.execute("SELECT file_id FROM files WHERE file_id = ?", (file_id,))
         if not cursor.fetchone():
-            logger.debug(
-                f"File {file_id} not found for TAGS_REMOVED operation, may have been deleted"
+            logger.info(
+                f"File {file_id} not found for TAGS_REMOVED operation, deferring"
             )
-            mark_operation_applied(operation.operation_id, conn=conn)
-            conn.commit()
-            return False
+
+            raise DependencyNotMetError(
+                dependency_description=f"File {file_id} must exist before tags can be removed",
+                required_dependency=f"file:{file_id}"
+            )
 
         cursor.execute(
             "SELECT tag FROM tags WHERE file_id = ?",
@@ -682,12 +793,14 @@ async def _apply_chunks_created(operation: Operation) -> bool:
 
         cursor.execute("SELECT file_id FROM files WHERE file_id = ?", (file_id,))
         if not cursor.fetchone():
-            logger.warning(
-                f"File {file_id} not found for CHUNKS_CREATED operation, skipping"
+            logger.info(
+                f"File {file_id} not found for CHUNKS_CREATED operation, deferring"
             )
-            mark_operation_applied(operation.operation_id, conn=conn)
-            conn.commit()
-            return False
+
+            raise DependencyNotMetError(
+                dependency_description=f"File {file_id} must exist before chunks can be created",
+                required_dependency=f"file:{file_id}"
+            )
 
         for chunk in chunks:
             chunk_id = chunk["chunk_id"]
@@ -789,3 +902,58 @@ def _merge_vector_clock(vector_clock: dict, conn) -> None:
             """,
             (controller_id, new_seq, datetime.utcnow().isoformat())
         )
+
+
+async def start_deferred_operations_manager():
+    """
+    Background task that periodically retries deferred operations.
+
+    Runs every 10 seconds and attempts to apply all deferred operations.
+    Operations that still have unmet dependencies will remain deferred.
+    """
+    logger.info("Starting deferred operations retry manager")
+
+    while True:
+        try:
+            await asyncio.sleep(10)
+
+            async with _lock:
+                if not _deferred_operations:
+                    continue
+
+                operations_to_retry = list(_deferred_operations.items())
+
+            if operations_to_retry:
+                logger.info(
+                    f"Retrying {len(operations_to_retry)} deferred operations "
+                    f"(periodic retry check)"
+                )
+
+            for op_id, operation in operations_to_retry:
+                from controller.replication.operation_log import get_operation_by_id
+
+                existing = get_operation_by_id(operation.operation_id)
+                if existing and existing.applied == 1:
+                    async with _lock:
+                        _deferred_operations.pop(op_id, None)
+                        for dep_key, waiting_ids in list(_operation_dependencies.items()):
+                            if op_id in waiting_ids:
+                                waiting_ids.remove(op_id)
+                                if not waiting_ids:
+                                    _operation_dependencies.pop(dep_key, None)
+
+                    logger.debug(
+                        f"Cleaned up already-applied deferred operation {op_id}"
+                    )
+                    continue
+
+                try:
+                    await apply_operation(operation)
+                except Exception as e:
+                    logger.debug(
+                        f"Deferred operation {operation.operation_id} "
+                        f"still cannot be applied: {e}"
+                    )
+
+        except Exception as e:
+            logger.error(f"Error in deferred operations manager: {e}", exc_info=True)
