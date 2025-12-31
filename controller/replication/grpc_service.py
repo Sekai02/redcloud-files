@@ -159,9 +159,15 @@ class ReplicationServicer:
         try:
             request = PushOperationsRequest.from_json(request_bytes)
 
-            logger.info(f"Received {len(request.operations)} operations to apply")
+            from controller.replication.anti_entropy_manager import _sort_operations_by_causality
 
-            for operation in request.operations:
+            sorted_operations = _sort_operations_by_causality(request.operations)
+
+            logger.info(
+                f"Received {len(request.operations)} operations, applying in causal order"
+            )
+
+            for operation in sorted_operations:
                 from controller.replication.operation_applier import apply_operation
                 await apply_operation(operation)
 

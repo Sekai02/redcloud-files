@@ -8,9 +8,10 @@ to ensure eventual consistency and repair missed gossip messages.
 import asyncio
 import random
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from common.constants import ANTI_ENTROPY_INTERVAL_SECONDS
+from common.protocol import Operation
 from controller.replication.controller_id import get_controller_id
 from controller.replication.operation_log import get_all_operation_ids
 from controller.replication.grpc_client import ReplicationClient
@@ -18,6 +19,44 @@ from controller.replication.operation_applier import apply_operation
 from controller.replication.gossip_manager import GossipManager
 
 logger = logging.getLogger(__name__)
+
+
+def _sort_operations_by_causality(operations: List[Operation]) -> List[Operation]:
+    """
+    Sort operations by causal ordering using vector clocks.
+
+    Operations are sorted by total vector clock value (sum of all sequences),
+    then by timestamp, then by operation_id for deterministic ordering.
+
+    Args:
+        operations: List of operations to sort
+
+    Returns:
+        Sorted list of operations in causal order
+    """
+    sorted_ops = sorted(
+        operations,
+        key=lambda op: (
+            _get_total_clock_value(op.vector_clock),
+            op.timestamp_ms,
+            op.operation_id
+        )
+    )
+
+    return sorted_ops
+
+
+def _get_total_clock_value(vector_clock: dict) -> int:
+    """
+    Calculate total vector clock value by summing all sequence numbers.
+
+    Args:
+        vector_clock: Vector clock dictionary mapping controller_id to sequence
+
+    Returns:
+        Sum of all sequence numbers in the vector clock
+    """
+    return sum(vector_clock.values())
 
 
 class AntiEntropyManager:
@@ -123,9 +162,14 @@ class AntiEntropyManager:
                     list(missing_from_me)
                 )
 
-                logger.info(f"Fetched {len(missing_ops)} operations from {peer_address}")
+                sorted_ops = _sort_operations_by_causality(missing_ops)
 
-                for op in missing_ops:
+                logger.info(
+                    f"Fetched {len(missing_ops)} operations from {peer_address}, "
+                    f"applying in causal order"
+                )
+
+                for op in sorted_ops:
                     try:
                         applied = await apply_operation(op)
                         if applied:

@@ -99,6 +99,10 @@ async def startup_event():
     await cleanup_task.start()
     logger.info("Background cleanup task started")
 
+    from controller.replication.operation_applier import start_deferred_operations_manager
+    asyncio.create_task(start_deferred_operations_manager())
+    logger.info("Deferred operations retry manager started")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
