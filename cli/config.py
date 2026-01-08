@@ -18,9 +18,15 @@ class Config:
         "controller_host": os.environ.get("DFS_CONTROLLER_HOST", "controller"),
         "controller_port": int(os.environ.get("DFS_CONTROLLER_PORT", "8000")),
         "timeout": 30,
-        "max_retries": 3,
+        "max_retries": 5,
         "retry_backoff_multiplier": 2,
     }
+
+    CONSISTENCY_RETRY_CODES = [
+        "FILE_NOT_FOUND",
+        "INVALID_CREDENTIALS",
+        "INVALID_API_KEY",
+    ]
 
     def __init__(self, config_path: Path):
         """
@@ -133,6 +139,18 @@ class Config:
             Dictionary with 'max_retries' and 'retry_backoff_multiplier'
         """
         return {
-            'max_retries': self.data.get('max_retries', 3),
+            'max_retries': self.data.get('max_retries', 5),
             'retry_backoff_multiplier': self.data.get('retry_backoff_multiplier', 2),
         }
+
+    @classmethod
+    def get_consistency_retry_codes(cls) -> list[str]:
+        """
+        Get error codes that should trigger consistency retries.
+
+        These codes indicate data may still be replicating across controllers.
+
+        Returns:
+            List of error code strings
+        """
+        return cls.CONSISTENCY_RETRY_CODES.copy()
