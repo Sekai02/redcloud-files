@@ -1,15 +1,18 @@
 """Unit tests for DNS-based service discovery module."""
 
 import socket
+import tempfile
 import pytest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 from common.dns_discovery import (
     discover_peers,
     discover_controller_peers,
     discover_chunkserver_peers,
     validate_dns_resolution,
-    get_peer_count
+    get_peer_count,
+    _discover_peers_dns_only
 )
 
 
@@ -51,12 +54,12 @@ class TestDiscoverPeers:
         assert result == []
 
     @patch('socket.getaddrinfo')
-    def test_discover_peers_dns_failure(self, mock_getaddrinfo):
-        """Test that DNS resolution failures propagate as exceptions."""
+    def test_discover_peers_dns_only_failure(self, mock_getaddrinfo):
+        """Test that DNS resolution failures propagate as exceptions in DNS-only mode."""
         mock_getaddrinfo.side_effect = socket.gaierror(-2, 'Name or service not known')
 
         with pytest.raises(socket.gaierror):
-            discover_peers('nonexistent', 8000)
+            _discover_peers_dns_only('nonexistent', 8000)
 
     @patch('socket.getaddrinfo')
     def test_discover_peers_unique_filtering(self, mock_getaddrinfo):
@@ -120,12 +123,13 @@ class TestDiscoverControllerPeers:
         assert result == ['10.0.1.5:8000']
 
     @patch('common.dns_discovery.discover_peers')
-    def test_discover_controller_peers_propagates_exception(self, mock_discover):
-        """Test that DNS errors propagate from discover_controller_peers."""
-        mock_discover.side_effect = socket.gaierror(-2, 'Name or service not known')
+    def test_discover_controller_peers_returns_empty_on_dns_error(self, mock_discover):
+        """Test that DNS errors return empty list (cache fallback behavior)."""
+        mock_discover.return_value = []
 
-        with pytest.raises(socket.gaierror):
-            discover_controller_peers()
+        result = discover_controller_peers()
+
+        assert result == []
 
 
 class TestDiscoverChunkserverPeers:
@@ -142,12 +146,13 @@ class TestDiscoverChunkserverPeers:
         assert result == ['10.0.1.10:50051', '10.0.1.11:50051']
 
     @patch('common.dns_discovery.discover_peers')
-    def test_discover_chunkserver_peers_propagates_exception(self, mock_discover):
-        """Test that DNS errors propagate from discover_chunkserver_peers."""
-        mock_discover.side_effect = socket.gaierror(-2, 'Name or service not known')
+    def test_discover_chunkserver_peers_returns_empty_on_dns_error(self, mock_discover):
+        """Test that DNS errors return empty list (cache fallback behavior)."""
+        mock_discover.return_value = []
 
-        with pytest.raises(socket.gaierror):
-            discover_chunkserver_peers()
+        result = discover_chunkserver_peers()
+
+        assert result == []
 
 
 class TestValidateDnsResolution:
@@ -246,3 +251,97 @@ class TestGetPeerCount:
         result = get_peer_count('', 8000)
 
         assert result == 0
+
+
+class TestCacheFallbackIntegration:
+    """Tests for cache fallback integration in discover_peers."""
+
+    @patch('common.dns_discovery._discover_peers_dns_only')
+    @patch('common.dns_discovery._get_peer_cache')
+    def test_discover_peers_uses_dns_first(self, mock_get_cache, mock_dns):
+        """Test that DNS is tried first before cache."""
+        mock_dns.return_value = ['10.0.1.5:8001', '10.0.1.6:8001']
+        mock_cache = MagicMock()
+        mock_get_cache.return_value = mock_cache
+
+        result = discover_peers('controller', 8001)
+
+        mock_dns.assert_called_once_with('controller', 8001, socket.AF_INET)
+        assert result == ['10.0.1.5:8001', '10.0.1.6:8001']
+
+    @patch('common.dns_discovery._discover_peers_dns_only')
+    @patch('common.dns_discovery._get_peer_cache')
+    def test_discover_peers_updates_cache_on_dns_success(self, mock_get_cache, mock_dns):
+        """Test that cache is updated when DNS succeeds."""
+        mock_dns.return_value = ['10.0.1.5:8001']
+        mock_cache = MagicMock()
+        mock_get_cache.return_value = mock_cache
+
+        discover_peers('controller', 8001)
+
+        mock_cache.update_cache.assert_called_once_with('controller', 8001, ['10.0.1.5:8001'])
+
+    @patch('common.dns_discovery._discover_peers_dns_only')
+    @patch('common.dns_discovery._get_peer_cache')
+    def test_discover_peers_falls_back_on_dns_error(self, mock_get_cache, mock_dns):
+        """Test that cache is used when DNS fails with socket.gaierror."""
+        mock_dns.side_effect = socket.gaierror(-2, 'Name or service not known')
+
+        mock_cache = MagicMock()
+        mock_cache.get_cached_peers.return_value = ['10.0.1.5:8001']
+        mock_get_cache.return_value = mock_cache
+
+        result = discover_peers('controller', 8001)
+
+        mock_cache.get_cached_peers.assert_called_once_with('controller', 8001)
+        assert result == ['10.0.1.5:8001']
+
+    @patch('common.dns_discovery._discover_peers_dns_only')
+    @patch('common.dns_discovery._get_peer_cache')
+    def test_discover_peers_returns_empty_on_no_cache(self, mock_get_cache, mock_dns):
+        """Test that empty list is returned when DNS fails and cache is empty."""
+        mock_dns.side_effect = socket.gaierror(-2, 'Name or service not known')
+
+        mock_cache = MagicMock()
+        mock_cache.get_cached_peers.return_value = []
+        mock_get_cache.return_value = mock_cache
+
+        result = discover_peers('controller', 8001)
+
+        assert result == []
+
+    @patch('common.dns_discovery._discover_peers_dns_only')
+    @patch('common.dns_discovery._get_peer_cache')
+    def test_discover_peers_does_not_fallback_on_empty_dns(self, mock_get_cache, mock_dns):
+        """Test that empty DNS result does not trigger cache fallback."""
+        mock_dns.return_value = []
+        mock_cache = MagicMock()
+        mock_get_cache.return_value = mock_cache
+
+        result = discover_peers('controller', 8001)
+
+        mock_cache.get_cached_peers.assert_not_called()
+        assert result == []
+
+    @patch('common.dns_discovery._discover_peers_dns_only')
+    @patch('common.dns_discovery._get_peer_cache')
+    def test_full_dns_failure_recovery_scenario(self, mock_get_cache, mock_dns):
+        """Test complete scenario: DNS works, fails, then recovers."""
+        mock_cache = MagicMock()
+        mock_cache.get_cached_peers.return_value = ['10.0.1.5:8001']
+        mock_get_cache.return_value = mock_cache
+
+        mock_dns.return_value = ['10.0.1.5:8001']
+        result1 = discover_peers('controller', 8001)
+        assert result1 == ['10.0.1.5:8001']
+        mock_cache.update_cache.assert_called()
+
+        mock_dns.side_effect = socket.gaierror(-2, 'DNS down')
+        result2 = discover_peers('controller', 8001)
+        assert result2 == ['10.0.1.5:8001']
+        mock_cache.get_cached_peers.assert_called()
+
+        mock_dns.side_effect = None
+        mock_dns.return_value = ['10.0.1.6:8001']
+        result3 = discover_peers('controller', 8001)
+        assert result3 == ['10.0.1.6:8001']

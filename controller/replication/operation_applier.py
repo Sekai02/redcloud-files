@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 _deferred_operations: Dict[str, Operation] = {}
 _operation_dependencies: Dict[str, Set[str]] = defaultdict(set)
+_skipped_file_ids: Set[str] = set()
 _lock = asyncio.Lock()
 
 
@@ -529,6 +530,13 @@ async def _apply_file_created(operation: Operation) -> bool:
                     )
                     mark_operation_applied(operation.operation_id, conn=conn)
                     conn.commit()
+
+                    async with _lock:
+                        _skipped_file_ids.add(payload["file_id"])
+                        logger.info(
+                            f"Registered file_id {payload['file_id']} as skipped due to conflict resolution"
+                        )
+
                     return False
 
                 logger.warning(
@@ -793,6 +801,18 @@ async def _apply_chunks_created(operation: Operation) -> bool:
 
         cursor.execute("SELECT file_id FROM files WHERE file_id = ?", (file_id,))
         if not cursor.fetchone():
+            async with _lock:
+                is_skipped = file_id in _skipped_file_ids
+
+            if is_skipped:
+                logger.info(
+                    f"File {file_id} was skipped due to conflict resolution, "
+                    f"skipping dependent CHUNKS_CREATED operation {operation.operation_id}"
+                )
+                mark_operation_applied(operation.operation_id, conn=conn)
+                conn.commit()
+                return False
+
             logger.info(
                 f"File {file_id} not found for CHUNKS_CREATED operation, deferring"
             )
