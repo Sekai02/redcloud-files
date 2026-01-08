@@ -834,9 +834,9 @@ class ControllerClient:
                         sys.stdout.flush()
 
                         if total_size > 0:
-                            return f"Downloaded: {filename} ({format_file_size(total_size)})\nSaved to: {output_file.absolute()}"
+                            return f"Downloaded: {filename} ({format_file_size(total_size)})\nSaved to: {output_file.relative_to(Path.cwd())}"
                         else:
-                            return f"Downloaded: {filename} ({format_file_size(downloaded)})\nSaved to: {output_file.absolute()}"
+                            return f"Downloaded: {filename} ({format_file_size(downloaded)})\nSaved to: {output_file.relative_to(Path.cwd())}"
 
                     elif response.status_code >= 500 and attempt < max_retries:
                         response.read()
