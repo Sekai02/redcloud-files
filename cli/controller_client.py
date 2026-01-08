@@ -1,6 +1,7 @@
 """HTTP client for communicating with Controller service."""
 
 import os
+import sys
 import time
 import uuid
 from typing import Optional
@@ -122,7 +123,8 @@ class ControllerClient:
         **kwargs
     ) -> httpx.Response:
         """
-        Make HTTP request with retry logic on 5xx errors and network failures.
+        Make HTTP request with retry logic on server errors, network failures,
+        and consistency-related errors (data may still be replicating).
 
         Args:
             method: HTTP method (GET, POST, DELETE, etc.)
@@ -141,6 +143,8 @@ class ControllerClient:
         backoff = retry_config['retry_backoff_multiplier']
 
         last_exception = None
+        last_response = None
+        retried_for_consistency = False
         
         self.request_id = str(uuid.uuid4())
         if 'headers' not in kwargs:
@@ -160,21 +164,39 @@ class ControllerClient:
                 )
 
                 if 400 <= response.status_code < 500:
-                    if response.status_code >= 400:
+                    if self._should_retry_for_consistency(response) and attempt < max_retries:
+                        delay = backoff ** attempt
+                        retried_for_consistency = True
+                        last_response = response
                         logger.warning(
-                            f"Client error: {method} {endpoint} status={response.status_code} [request_id={self.request_id}]"
+                            f"Consistency retry (attempt {attempt + 1}/{max_retries + 1}): "
+                            f"{method} {endpoint} code={self._extract_error_code(response)}, "
+                            f"data may be replicating, retrying in {delay}s [request_id={self.request_id}]"
                         )
+                        self._show_retry_status(attempt, max_retries, "waiting for data sync", delay)
+                        time.sleep(delay)
+                        continue
+
+                    if retried_for_consistency:
+                        self._clear_retry_status()
+                    logger.warning(
+                        f"Client error: {method} {endpoint} status={response.status_code} [request_id={self.request_id}]"
+                    )
                     return response
 
                 if response.status_code >= 500 and attempt < max_retries:
                     delay = backoff ** attempt
+                    last_response = response
                     logger.warning(
                         f"Server error (attempt {attempt + 1}/{max_retries + 1}): "
                         f"{method} {endpoint} status={response.status_code}, retrying in {delay}s [request_id={self.request_id}]"
                     )
+                    self._show_retry_status(attempt, max_retries, "server unavailable", delay)
                     time.sleep(delay)
                     continue
 
+                if retried_for_consistency or last_response:
+                    self._clear_retry_status()
                 return response
 
             except (httpx.ConnectError, httpx.TimeoutException) as e:
@@ -185,17 +207,22 @@ class ControllerClient:
                         f"Network error (attempt {attempt + 1}/{max_retries + 1}): "
                         f"{method} {endpoint} error={type(e).__name__}, retrying in {delay}s [request_id={self.request_id}]"
                     )
+                    self._show_retry_status(attempt, max_retries, "server unavailable", delay)
                     time.sleep(delay)
                     continue
                 else:
+                    self._clear_retry_status()
                     logger.error(
                         f"Network error (max retries exceeded): {method} {endpoint} error={e} [request_id={self.request_id}]"
                     )
+
+        self._clear_retry_status()
         if last_exception:
+            retry_info = f" (after {max_retries + 1} attempts)"
             if isinstance(last_exception, httpx.ConnectError):
-                raise ConnectionError("Cannot connect to controller server. Is it running?")
+                raise ConnectionError(f"Cannot connect to controller server{retry_info}. Is it running?")
             elif isinstance(last_exception, httpx.TimeoutException):
-                raise ConnectionError("Request timed out. Server may be overloaded.")
+                raise ConnectionError(f"Request timed out{retry_info}. Server may be overloaded.")
         else:
             raise ConnectionError("Max retries exceeded")
 
@@ -262,6 +289,62 @@ class ControllerClient:
         if not api_key:
             raise ValueError("Not logged in. Please run: login <username> <password>")
         return {'Authorization': f'Bearer {api_key}'}
+
+    def _show_retry_status(
+        self,
+        attempt: int,
+        max_retries: int,
+        reason: str,
+        delay: int
+    ) -> None:
+        """
+        Display retry status to user with inline update.
+
+        Args:
+            attempt: Current attempt number (0-indexed)
+            max_retries: Maximum retry attempts
+            reason: Human-readable reason for retry
+            delay: Seconds until next retry
+        """
+        status_msg = f"\r{YELLOW}⟳ Retrying ({attempt + 2}/{max_retries + 1}): {reason}... {delay}s{RESET}"
+        sys.stdout.write(status_msg)
+        sys.stdout.flush()
+
+    def _clear_retry_status(self) -> None:
+        """Clear the retry status line."""
+        sys.stdout.write('\r' + ' ' * 80 + '\r')
+        sys.stdout.flush()
+
+    def _extract_error_code(self, response: httpx.Response) -> str:
+        """
+        Extract error code from HTTP response.
+
+        Args:
+            response: HTTP response object
+
+        Returns:
+            Error code string or 'UNKNOWN'
+        """
+        try:
+            error_data = response.json()
+            return error_data.get('code', 'UNKNOWN')
+        except:
+            return 'UNKNOWN'
+
+    def _should_retry_for_consistency(self, response: httpx.Response) -> bool:
+        """
+        Check if response error code indicates potential consistency issue.
+
+        Args:
+            response: HTTP response object
+
+        Returns:
+            True if retry may help due to replication lag
+        """
+        if response.status_code not in (401, 404):
+            return False
+        error_code = self._extract_error_code(response)
+        return error_code in Config.get_consistency_retry_codes()
 
     def register(self, username: str, password: str) -> str:
         """
@@ -342,7 +425,7 @@ class ControllerClient:
 
     def add_files(self, file_paths: list[str], tags: list[str]) -> str:
         """
-        Upload files with tags.
+        Upload files with tags, with retry on network and server errors.
 
         Args:
             file_paths: List of file paths to upload (can use uploads/ prefix, be relative, or absolute)
@@ -351,14 +434,16 @@ class ControllerClient:
         Returns:
             Formatted result message with upload status for each file
         """
-        import sys
-        
         results = []
 
         try:
             headers = self._get_auth_header()
         except ValueError as e:
             return f"Error: {e}"
+
+        retry_config = self.config.get_retry_config()
+        max_retries = retry_config['max_retries']
+        backoff = retry_config['retry_backoff_multiplier']
 
         for file_path in file_paths:
             normalized_path, error = self._normalize_upload_path(file_path)
@@ -383,47 +468,79 @@ class ControllerClient:
             filename = os.path.basename(normalized_path)
             upload_timeout = self._calculate_upload_timeout(file_size)
 
-            try:
-                with ProgressFileWrapper(normalized_path, file_size, filename) as progress_file:
-                    upload_headers = headers.copy()
+            upload_success = False
+            last_error = None
 
-                    files = {'file': (filename, progress_file)}
-                    data = {'tags': ','.join(tags)}
+            for attempt in range(max_retries + 1):
+                try:
+                    with ProgressFileWrapper(normalized_path, file_size, filename) as progress_file:
+                        upload_headers = headers.copy()
 
-                    with httpx.Client(
-                        base_url=self.config.get_base_url(),
-                        timeout=upload_timeout
-                    ) as upload_client:
-                        response = upload_client.post(
-                            '/files',
-                            files=files,
-                            data=data,
-                            headers=upload_headers
+                        files = {'file': (filename, progress_file)}
+                        data = {'tags': ','.join(tags)}
+
+                        with httpx.Client(
+                            base_url=self.config.get_base_url(),
+                            timeout=upload_timeout
+                        ) as upload_client:
+                            response = upload_client.post(
+                                '/files',
+                                files=files,
+                                data=data,
+                                headers=upload_headers
+                            )
+
+                        if response.status_code == 201:
+                            self._clear_retry_status()
+                            result = response.json()
+                            results.append(
+                                f"Added: {result['name']} "
+                                f"(ID: {result['file_id'][:8]}..., "
+                                f"Size: {format_file_size(result['size'])}, "
+                                f"Tags: {', '.join(result['tags'])})"
+                            )
+                            upload_success = True
+                            break
+                        elif response.status_code >= 500 and attempt < max_retries:
+                            self._clear_retry_status()
+                            delay = backoff ** attempt
+                            logger.warning(
+                                f"Upload server error (attempt {attempt + 1}/{max_retries + 1}): "
+                                f"status={response.status_code}, retrying in {delay}s"
+                            )
+                            self._show_retry_status(attempt, max_retries, "server unavailable", delay)
+                            time.sleep(delay)
+                            continue
+                        else:
+                            self._clear_retry_status()
+                            last_error = self._format_error(response)
+                            break
+
+                except (httpx.ConnectError, httpx.TimeoutException) as e:
+                    self._clear_retry_status()
+                    if attempt < max_retries:
+                        delay = backoff ** attempt
+                        logger.warning(
+                            f"Upload network error (attempt {attempt + 1}/{max_retries + 1}): "
+                            f"{type(e).__name__}, retrying in {delay}s"
                         )
-
-                    if response.status_code == 201:
-                        result = response.json()
-                        results.append(
-                            f"Added: {result['name']} "
-                            f"(ID: {result['file_id'][:8]}..., "
-                            f"Size: {format_file_size(result['size'])}, "
-                            f"Tags: {', '.join(result['tags'])})"
-                        )
+                        self._show_retry_status(attempt, max_retries, "server unavailable", delay)
+                        time.sleep(delay)
+                        continue
                     else:
-                        results.append(f"Error uploading {file_path}: {self._format_error(response)}")
+                        if isinstance(e, httpx.ConnectError):
+                            last_error = f"Cannot connect to controller server (after {max_retries + 1} attempts)"
+                        else:
+                            last_error = f"Upload timed out (after {max_retries + 1} attempts, file size: {format_file_size(file_size)})"
+                        break
+                except Exception as e:
+                    self._clear_retry_status()
+                    last_error = str(e)
+                    break
 
-            except httpx.ConnectError:
-                sys.stdout.write('\r' + ' ' * 100 + '\r')
-                sys.stdout.flush()
-                results.append(f"Error uploading {file_path}: Cannot connect to controller server")
-            except httpx.TimeoutException:
-                sys.stdout.write('\r' + ' ' * 100 + '\r')
-                sys.stdout.flush()
-                results.append(f"Error uploading {file_path}: Upload timed out (file size: {format_file_size(file_size)}, timeout: {upload_timeout:.1f}s)")
-            except Exception as e:
-                sys.stdout.write('\r' + ' ' * 100 + '\r')
-                sys.stdout.flush()
-                results.append(f"Error uploading {file_path}: {e}")
+            if not upload_success and last_error:
+                self._clear_retry_status()
+                results.append(f"Error uploading {file_path}: {last_error}")
 
         return '\n'.join(results) if results else "No files uploaded."
 
@@ -636,7 +753,9 @@ class ControllerClient:
 
     def download(self, filename: str, output_path: str | None = None) -> str:
         """
-        Download a file by filename with progress feedback.
+        Download a file by filename with progress feedback and retry support.
+
+        Retries on network errors, server errors, and FILE_NOT_FOUND (data may be replicating).
 
         Args:
             filename: Name of file to download
@@ -645,83 +764,143 @@ class ControllerClient:
         Returns:
             Success message with download details
         """
-        import sys
-        
         try:
             headers = self._get_auth_header()
         except ValueError as e:
             return f"Error: {e}"
 
-        try:
-            url = f'/files/by-name/{filename}/download'
+        retry_config = self.config.get_retry_config()
+        max_retries = retry_config['max_retries']
+        backoff = retry_config['retry_backoff_multiplier']
 
-            print(f"{YELLOW}Download may take a moment...{RESET}")
+        url = f'/files/by-name/{filename}/download'
+        last_error = None
+        retried = False
 
-            with self.session.stream('GET', url, headers=headers) as response:
-                if response.status_code == 200:
-                    output_file, error = self._normalize_download_path(output_path or "", filename)
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt == 0:
+                    print(f"{YELLOW}Download may take a moment...{RESET}")
 
-                    if error:
+                with self.session.stream('GET', url, headers=headers) as response:
+                    if response.status_code == 200:
+                        if retried:
+                            self._clear_retry_status()
+                        output_file, error = self._normalize_download_path(output_path or "", filename)
+
+                        if error:
+                            response.read()
+                            return f"Error: {error}"
+
+                        total_size = int(response.headers.get('Content-Length', 0))
+                        downloaded = 0
+                        last_progress_time = time.time()
+                        stall_threshold = 3
+
+                        with open(output_file, 'wb') as f:
+                            for chunk in response.iter_bytes(chunk_size=8192):
+                                f.write(chunk)
+                                downloaded += len(chunk)
+
+                                current_time = time.time()
+                                time_since_last_progress = current_time - last_progress_time
+
+                                if total_size > 0:
+                                    progress = (downloaded / total_size) * 100
+
+                                    if time_since_last_progress > stall_threshold:
+                                        sys.stdout.write(
+                                            f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({progress:.1f}%) {YELLOW}- Retrieving data...{RESET}"
+                                        )
+                                    else:
+                                        sys.stdout.write(
+                                            f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({GREEN}{progress:.1f}%{RESET})"
+                                        )
+                                    sys.stdout.flush()
+                                else:
+                                    if time_since_last_progress > stall_threshold:
+                                        sys.stdout.write(
+                                            f"\rDownloading {filename}: {format_file_size(downloaded)} {YELLOW}- Retrieving data...{RESET}"
+                                        )
+                                    else:
+                                        sys.stdout.write(
+                                            f"\rDownloading {filename}: {format_file_size(downloaded)}"
+                                        )
+                                    sys.stdout.flush()
+
+                                last_progress_time = current_time
+
+                        sys.stdout.write('\n')
+                        sys.stdout.flush()
+
+                        if total_size > 0:
+                            return f"Downloaded: {filename} ({format_file_size(total_size)})\nSaved to: {output_file.absolute()}"
+                        else:
+                            return f"Downloaded: {filename} ({format_file_size(downloaded)})\nSaved to: {output_file.absolute()}"
+
+                    elif response.status_code >= 500 and attempt < max_retries:
                         response.read()
-                        return f"Error: {error}"
+                        delay = backoff ** attempt
+                        retried = True
+                        logger.warning(
+                            f"Download server error (attempt {attempt + 1}/{max_retries + 1}): "
+                            f"status={response.status_code}, retrying in {delay}s"
+                        )
+                        self._show_retry_status(attempt, max_retries, "server unavailable", delay)
+                        time.sleep(delay)
+                        continue
 
-                    total_size = int(response.headers.get('Content-Length', 0))
-                    downloaded = 0
-                    last_progress_time = time.time()
-                    stall_threshold = 3
+                    elif self._should_retry_for_consistency(response) and attempt < max_retries:
+                        response.read()
+                        delay = backoff ** attempt
+                        retried = True
+                        logger.warning(
+                            f"Download consistency retry (attempt {attempt + 1}/{max_retries + 1}): "
+                            f"file may be replicating, retrying in {delay}s"
+                        )
+                        self._show_retry_status(attempt, max_retries, "waiting for data sync", delay)
+                        time.sleep(delay)
+                        continue
 
-                    with open(output_file, 'wb') as f:
-                        for chunk in response.iter_bytes(chunk_size=8192):
-                            f.write(chunk)
-                            downloaded += len(chunk)
-
-                            current_time = time.time()
-                            time_since_last_progress = current_time - last_progress_time
-
-                            if total_size > 0:
-                                progress = (downloaded / total_size) * 100
-
-                                if time_since_last_progress > stall_threshold:
-                                    sys.stdout.write(
-                                        f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({progress:.1f}%) {YELLOW}- Retrieving data...{RESET}"
-                                    )
-                                else:
-                                    sys.stdout.write(
-                                        f"\rDownloading {filename}: {format_file_size(downloaded)} / {format_file_size(total_size)} ({GREEN}{progress:.1f}%{RESET})"
-                                    )
-                                sys.stdout.flush()
-                            else:
-                                if time_since_last_progress > stall_threshold:
-                                    sys.stdout.write(
-                                        f"\rDownloading {filename}: {format_file_size(downloaded)} {YELLOW}- Retrieving data...{RESET}"
-                                    )
-                                else:
-                                    sys.stdout.write(
-                                        f"\rDownloading {filename}: {format_file_size(downloaded)}"
-                                    )
-                                sys.stdout.flush()
-
-                            last_progress_time = current_time
-
-                    sys.stdout.write('\n')
-                    sys.stdout.flush()
-
-                    if total_size > 0:
-                        return f"Downloaded: {filename} ({format_file_size(total_size)})\nSaved to: {output_file.absolute()}"
                     else:
-                        return f"Downloaded: {filename} ({format_file_size(downloaded)})\nSaved to: {output_file.absolute()}"
-                else:
-                    response.read()
-                    return f"Error: {self._format_error(response)}"
+                        response.read()
+                        self._clear_retry_status()
+                        error_msg = self._format_error(response)
+                        if retried:
+                            return f"Error: {error_msg} (after {attempt + 1} attempts)"
+                        return f"Error: {error_msg}"
 
-        except httpx.ConnectError:
-            return "Error: Cannot connect to controller server. Is it running?"
-        except httpx.TimeoutException:
-            return "Error: Request timed out. Server may be overloaded."
-        except IOError as e:
-            return f"Error writing file: {e}"
-        except Exception as e:
-            return f"Unexpected error downloading file: {e}"
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                self._clear_retry_status()
+                if attempt < max_retries:
+                    delay = backoff ** attempt
+                    retried = True
+                    logger.warning(
+                        f"Download network error (attempt {attempt + 1}/{max_retries + 1}): "
+                        f"{type(e).__name__}, retrying in {delay}s"
+                    )
+                    self._show_retry_status(attempt, max_retries, "server unavailable", delay)
+                    time.sleep(delay)
+                    continue
+                else:
+                    if isinstance(e, httpx.ConnectError):
+                        last_error = f"Cannot connect to controller server (after {max_retries + 1} attempts)"
+                    else:
+                        last_error = f"Request timed out (after {max_retries + 1} attempts)"
+                    break
+
+            except IOError as e:
+                self._clear_retry_status()
+                return f"Error writing file: {e}"
+
+            except Exception as e:
+                self._clear_retry_status()
+                return f"Unexpected error downloading file: {e}"
+
+        self._clear_retry_status()
+        if last_error:
+            return f"Error: {last_error}"
+        return f"Error: Download failed after {max_retries + 1} attempts"
 
     def close(self) -> None:
         """Close the HTTP session."""
