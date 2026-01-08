@@ -2,6 +2,7 @@
 
 import socket
 import logging
+import threading
 from typing import List
 
 from common.constants import (
@@ -13,10 +14,32 @@ from common.constants import (
 
 logger = logging.getLogger(__name__)
 
+_peer_cache = None
+_cache_init_lock = threading.Lock()
 
-def discover_peers(hostname: str, port: int, family: socket.AddressFamily = socket.AF_INET) -> List[str]:
+
+def _get_peer_cache():
     """
-    Discover all peer instances via DNS lookup.
+    Get or initialize the global peer cache singleton.
+
+    Returns:
+        PeerCache instance
+    """
+    global _peer_cache
+
+    if _peer_cache is None:
+        with _cache_init_lock:
+            if _peer_cache is None:
+                from common.peer_cache import PeerCache
+                _peer_cache = PeerCache()
+                _peer_cache.start_background_refresh()
+
+    return _peer_cache
+
+
+def _discover_peers_dns_only(hostname: str, port: int, family: socket.AddressFamily = socket.AF_INET) -> List[str]:
+    """
+    Discover all peer instances via DNS lookup (DNS-only, no cache fallback).
 
     Uses socket.getaddrinfo() to resolve DNS alias to multiple IP addresses.
     Filters to IPv4 by default to match Docker DNS behavior and avoid duplicates.
@@ -62,34 +85,78 @@ def discover_peers(hostname: str, port: int, family: socket.AddressFamily = sock
         raise
 
 
-def discover_controller_peers() -> List[str]:
+def discover_peers(hostname: str, port: int, family: socket.AddressFamily = socket.AF_INET) -> List[str]:
     """
-    Discover all controller instances via DNS.
+    Discover all peer instances via DNS lookup with cache fallback.
 
-    Resolves the 'controller' DNS alias to find all controller instances
-    in the Docker Swarm overlay network.
+    Tries DNS first. On DNS failure (socket.gaierror), falls back to cached
+    peers from previous successful discoveries. Cache is refreshed every 30
+    seconds in background thread.
+
+    Args:
+        hostname: DNS alias to resolve (e.g., 'controller', 'chunkserver')
+        port: Service port number
+        family: Address family filter (default: IPv4 only)
 
     Returns:
-        List of controller addresses in format ["IP:8000", ...]
+        List of "IP:PORT" strings for all discovered peers, sorted for determinism.
+        Returns empty list if no peers found (DNS or cache).
+    """
+    try:
+        peers = _discover_peers_dns_only(hostname, port, family)
 
-    Raises:
-        socket.gaierror: If 'controller' DNS alias doesn't resolve
+        cache = _get_peer_cache()
+        if peers:
+            cache.update_cache(hostname, port, peers)
+
+        return peers
+
+    except socket.gaierror as e:
+        logger.warning(
+            f"DNS discovery failed for '{hostname}': {e}, using cache fallback"
+        )
+
+        cache = _get_peer_cache()
+        cached_peers = cache.get_cached_peers(hostname, port)
+
+        if cached_peers:
+            logger.info(
+                f"Cache fallback returned {len(cached_peers)} peer(s) for {hostname}"
+            )
+        else:
+            logger.warning(
+                f"No cached peers available for {hostname}:{port}"
+            )
+
+        return cached_peers
+
+
+def discover_controller_peers() -> List[str]:
+    """
+    Discover all controller instances via DNS with cache fallback.
+
+    Resolves the 'controller' DNS alias to find all controller instances
+    in the Docker Swarm overlay network. Falls back to cached peers if DNS
+    resolution fails.
+
+    Returns:
+        List of controller addresses in format ["IP:8000", ...].
+        Returns empty list if DNS fails and no cached peers available.
     """
     return discover_peers(CONTROLLER_SERVICE_NAME, CONTROLLER_PORT)
 
 
 def discover_chunkserver_peers() -> List[str]:
     """
-    Discover all chunkserver instances via DNS.
+    Discover all chunkserver instances via DNS with cache fallback.
 
     Resolves the 'chunkserver' DNS alias to find all chunkserver instances
-    in the Docker Swarm overlay network.
+    in the Docker Swarm overlay network. Falls back to cached peers if DNS
+    resolution fails.
 
     Returns:
-        List of chunkserver addresses in format ["IP:50051", ...]
-
-    Raises:
-        socket.gaierror: If 'chunkserver' DNS alias doesn't resolve
+        List of chunkserver addresses in format ["IP:50051", ...].
+        Returns empty list if DNS fails and no cached peers available.
     """
     return discover_peers(CHUNKSERVER_SERVICE_NAME, CHUNKSERVER_PORT)
 
