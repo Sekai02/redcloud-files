@@ -3,7 +3,6 @@
 import os
 import sys
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import InMemoryHistory
 
 from cli.commands import (
@@ -16,6 +15,7 @@ from cli.commands import (
     handle_login,
     handle_download,
 )
+from cli.completer import RedCloudCompleter
 from cli.constants import (
     COMMANDS,
     HELP_TEXT,
@@ -75,7 +75,7 @@ def dispatch_command(cmd_obj) -> str:
 
 def repl_loop() -> None:
     """Start interactive REPL with prompt_toolkit."""
-    completer = WordCompleter(COMMANDS, ignore_case=True)
+    completer = RedCloudCompleter()
     history = InMemoryHistory()
     session: PromptSession = PromptSession(
         completer=completer, history=history, style=STYLE
