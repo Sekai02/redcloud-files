@@ -57,3 +57,5 @@ Examples:
   delete archived"""
 
 SUPPORTED_FILE_EXTENSIONS = (".txt", ".pdf", ".jpg", ".png", ".doc", ".docx", ".csv", ".json", ".xml", ".chk")
+
+UPLOADS_DIR = "uploads"
