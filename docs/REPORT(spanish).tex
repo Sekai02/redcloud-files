@@ -1,0 +1,180 @@
+\documentclass[conference]{IEEEtran}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{url}
+
+\renewcommand{\thesubsection}{\Alph{subsection}}
+
+\begin{document}
+
+\title{Sistema de Archivos Distribuido Basado en Etiquetas (RedCloud Files)}
+
+\author{\IEEEauthorblockN{Mauricio Sunde Jiménez, Luis Alejandro Arteaga Morales}
+\IEEEauthorblockA{Proyecto de Sistemas Distribuidos\\
+Enero 2026}}
+
+\maketitle
+
+\begin{abstract}
+RedCloud Files es un sistema de archivos distribuido basado en etiquetas que implementa un modelo AP (Availability + Partition Tolerance) con consistencia eventual acotada. El diseño utiliza arquitectura peer-to-peer sin líder, replicación completa, y protocolos de gossip y anti-entropía para convergencia en decenas de segundos. Se analizan ocho aspectos del diseño: arquitectura, procesos, comunicación, coordinación, nombrado, consistencia, tolerancia a fallos y seguridad, demostrando trade-offs conscientes según el teorema CAP.
+\end{abstract}
+
+\begin{IEEEkeywords}
+sistemas distribuidos, consistencia eventual, replicación, gossip protocol, teorema CAP
+\end{IEEEkeywords}
+
+\section{Arquitectura}
+
+\subsection{Posicionamiento en el Teorema CAP}
+RedCloud Files implementa un modelo AP (Availability + Partition Tolerance) que prioriza disponibilidad sobre consistencia fuerte. Durante particiones de red, el sistema continúa aceptando operaciones en ambas particiones, tolerando divergencia temporal con garantía de convergencia eventual.
+
+\subsection{Arquitectura de Tres Capas}
+\textbf{Controllers (Capa de Metadatos):} Gestionan usuarios, autenticación, metadatos de archivos y mapeo a chunks físicos. Arquitectura peer-to-peer sin líder, estado replicado mediante log de operaciones.
+
+\textbf{Chunkservers (Capa de Almacenamiento):} Almacenan chunks de datos inmutables (4MB) con checksums SHA256. Replicación completa entre todos los nodos, gestión de tombstones para prevenir resurrección de datos.
+
+\textbf{CLI (Capa de Cliente):} Interfaz ligera sin estado, descubrimiento dinámico de servicios, failover automático entre controllers.
+
+\subsection{Decisiones de Diseño Fundamentales}
+\begin{itemize}
+\item \textbf{Consistencia eventual sobre fuerte:} Lecturas potencialmente desactualizadas a cambio de disponibilidad continua
+\item \textbf{Replicación completa sobre particionamiento}
+\item \textbf{Sin líder sobre consenso:} Opera con cualquier número de nodos sin quorum
+\item \textbf{Inmutabilidad:} Chunks write-once/read-many simplifican replicación
+\end{itemize}
+
+\section{Procesos}
+
+\subsection{Tipos de Procesos}
+\textbf{Controllers:} N instancias replicadas ($N \geq 1$) sin estado compartido, peers equivalentes sin jerarquía, coordinación mediante replicación.
+
+\textbf{Chunkservers:} M instancias ($M \geq 1$) con replicación completa, sin particionamiento de datos, cada nodo puede servir cualquier chunk.
+
+\textbf{Clientes:} Instancia única por sesión, efímeros, sin estado persistente.
+
+\subsection{Concurrencia y Escalabilidad}
+Modelo basado en event loops asíncronos para alta concurrencia. Tareas periódicas en background: gossip (2s), anti-entropía (30s), descubrimiento de peers (30s), garbage collection.
+
+Escalabilidad horizontal: agregar controllers aumenta capacidad de procesamiento, agregar chunkservers aumenta throughput I/O. Limitaciones: costo de sincronización, overhead de almacenamiento lineal, bound de convergencia crece con nodos.
+
+\section{Comunicación}
+
+\subsection{Arquitectura Multi-Protocolo}
+\textbf{REST/HTTP:} Cliente-Controller para simplicidad y debugging. JSON para metadatos, multipart para binarios, Bearer tokens para autenticación.
+
+\textbf{gRPC:} Servidor-Servidor para rendimiento. Serialización binaria Protocol Buffers, streaming bidireccional, multiplexación HTTP/2.
+
+\subsection{Patrones de Mensajería}
+\textbf{Gossip Protocol:} Diseminación epidémica. Cada nodo selecciona $K=2$ peers aleatorios cada $T=2s$, envía resumen de estado, peers solicitan información faltante. Convergencia $O(\log N)$ rondas, tolerante a pérdida de mensajes.
+
+\textbf{Anti-Entropy:} Sincronización exhaustiva. Cada $T'=30s$, nodo contacta 1 peer aleatorio, intercambian resúmenes completos, transfieren diferencias bidireccionales. Garantiza convergencia eventual.
+
+\textbf{Streaming Bidireccional:} Transferencia incremental de chunks.
+
+\section{Coordinación}
+
+\subsection{Diseño Sin Líder}
+Arquitectura leaderless sin algoritmos de consenso. Elimina punto único de falla, no requiere quorum, pero requiere resolución determinística de conflictos.
+
+\subsection{Ordenamiento Causal}
+\textbf{Vector Clocks:} Cada nodo mantiene vector $V_i$ donde $V_i[j]$ es conocimiento sobre eventos del nodo $j$. Relaciones: $V_1 < V_2$ (happens-before), $V_1 \parallel V_2$ (concurrencia). Controllers incrementan contador al generar operación, mergen al recibir: $V[k] = \max(V_{local}[k], V_{remote}[k])$.
+
+\textbf{Operaciones Idempotentes:} Identificadores únicos previenen efectos duplicados, permiten reintentos seguros.
+
+\textbf{Operaciones Diferidas:} Cola para operaciones con dependencias no satisfechas, reintentos cuando dependencias lleguen.
+
+\subsection{Resolución de Conflictos}
+\textbf{Last-Write-Wins (LWW):} Para campos escalares, timestamp más reciente gana, tie-breaker con \texttt{controller\_id}. Determinística pero puede perder escrituras concurrentes.
+
+\textbf{Merge Semántico:} Para conjuntos (tags), union de operaciones concurrentes, tombstones para eliminaciones.
+
+\textbf{Reconciliación Post-Partición:} Detección via gossip $\rightarrow$ resumen via anti-entropía $\rightarrow$ identificación de divergencias $\rightarrow$ transferencia bidireccional $\rightarrow$ aplicación con resolución determinística $\rightarrow$ convergencia. Bound: ``decenas de segundos'' en LAN.
+
+\section{Nombrado y Localización}
+
+\subsection{Descubrimiento DNS}
+DNS como único mecanismo de service discovery. Aliases: \texttt{controller} (todos los controllers activos), \texttt{chunkserver} (todos los chunkservers activos). Round-robin DNS para distribución básica. Caché local con TTL (30s refresh, 10min retention) como fallback.
+
+\subsection{Identificación}
+UUIDs para todos los recursos: controllers (\texttt{hostname\_uuid}), users/files/chunks/operations (\texttt{uuid}), API keys (\texttt{dfs\_uuid}). Generación descentralizada sin coordinación, colisiones estadísticamente imposibles ($2^{128}$).
+
+\subsection{Localización}
+\textbf{Metadata:} Cualquier controller puede servir queries. Sin sharding, convergencia al mismo estado, cliente contacta cualquier controller disponible.
+
+\textbf{Chunks:} Cualquier chunkserver puede servir cualquier chunk. Sin particionamiento, replicación completa elimina necesidad de routing.
+
+\section{Modelo de Consistencia y Estrategia de Replicación}
+
+\subsection{Consistencia Eventual}
+Propiedades: (1) Safety - sin actualizaciones, todos convergen; (2) Liveness - actualizaciones eventualmente visibles; (3) Bounded Convergence - convergencia acotada tras reconexión.
+
+NO garantiza: Linearizability, Causal Consistency Global, Read-Your-Writes.
+
+\subsection{Replicación de Metadatos}
+\textbf{Operation Log:} Cambios de estado generan operations con tipo, payload, timestamp, vector clock. Replicación mediante gossip (rápido, $O(\log N) \times 2s \approx 10-20s$) + anti-entropía (exhaustivo, hasta 30s).
+
+Operaciones: \texttt{USER\_CREATED}, \texttt{API\_KEY\_UPDATED}, \texttt{FILE\_METADATA\_UPDATED}.
+
+\subsection{Replicación de Datos}
+\textbf{Full Replication:} Chunk escrito a todos los chunkservers disponibles, faltantes reciben via anti-entropía. Sin distinción primaria/secundaria.
+
+Write: descubrir via DNS $\rightarrow$ enviar en paralelo $\rightarrow$ esperar ACK mayoría $\rightarrow$ retornar éxito.
+Read: descubrir $\rightarrow$ seleccionar arbitrariamente $\rightarrow$ reintentar si falla.
+
+\textbf{Integridad:} Checksums SHA256 verificados en escritura, lectura y anti-entropía.
+
+\subsection{Gestión de Eliminaciones}
+\textbf{Tombstones:} Eliminación genera tombstone replicado indicando ``eliminado en timestamp T''. Anti-entropía propaga tombstones, nodos eliminan copia antigua. Persisten indefinidamente (GC conservativo).
+
+\section{Tolerancia a Fallos y Resiliencia}
+
+\subsection{Clasificación}
+\textbf{Crash (Fail-Stop):} Detección por timeouts, failover a nodos restantes, recuperación via catch-up.
+
+\textbf{Particiones de Red:} Detección cuando gossip falla, ambas particiones operan independientemente, healing automático tras reconexión.
+
+\textbf{Bizantinos:} NO TOLERADO. Sistema asume fail-stop model.
+
+\subsection{Disponibilidad}
+Sistema disponible con: $\geq 1$ controller operativo, $\geq 1$ chunkserver operativo, cliente puede contactar controller. No requiere quorum ni mayoría.
+
+Degradación gradual: fallos de $N-1$ nodos reducen throughput pero mantienen operación.
+
+\subsection{Recuperación}
+\textbf{Controller:} Estado preservado - carga database, descubre peers, ejecuta gossip/anti-entropía, converge. Estado perdido - solicita ALL operations via anti-entropía, reconstruye estado completo. Tiempo: proporcional a log ($\sim 30-120s$).
+
+\textbf{Chunkserver:} Escanea directorio, reconstruye índice, ejecuta anti-entropía, recibe chunks faltantes. Tiempo: proporcional a volumen (minutos-horas).
+
+\subsection{Particiones}
+Durante split-brain: ambas particiones aceptan operaciones, divergencia temporal. Tras healing: gossip reestablece contacto, anti-entropía transfiere operations bidireccional, resolución LWW, convergencia. Consecuencias: writes perdedoras descartadas, posible ``rollback'' observable.
+
+\section{Modelo de Seguridad}
+
+\subsection{Superficie de Ataque}
+\textbf{Vectores:} Interceptación de tráfico (sin TLS), acceso no autorizado a almacenamiento (sin cifrado en reposo), denegación de servicio (sin rate limiting), inyección de operations maliciosas (peers sin autenticación criptográfica), enumeración de usuarios.
+
+\subsection{Autenticación}
+\textbf{Usuarios:} Username + password $\rightarrow$ bcrypt hash $\rightarrow$ API key generado. API key como bearer token. Rotación en cada login, sin expiración automática.
+
+\textbf{Entre Servicios:} SIN autenticación mutua. Confianza implícita en red overlay. Apropiado solo para entornos de confianza.
+
+\subsection{Autorización}
+Control basado en propiedad: usuario solo accede archivos propios. Verificación: $owner\_id = user\_id$. Sin roles, sin compartir, sin permisos granulares.
+
+\subsection{Limitaciones}
+Sin cifrado end-to-end, sin anonimización, retención indefinida. Apropiado para: entornos de desarrollo/pruebas, LANs privadas. Inapropiado para: datos sensibles, ambientes multi-tenant públicos.
+
+\section{Conclusiones}
+
+\textbf{Fortalezas:} Disponibilidad continua durante particiones, simplicidad operacional, escalabilidad horizontal, auto-reparación, sin punto único de falla.
+
+\textbf{Limitaciones:} Consistencia débil, replicación completa costosa, seguridad básica, sin persistencia durable, resolución de conflictos simple.
+
+\textbf{Apropiado para:} Desarrollo/staging, LANs privadas, almacenamiento temporal, clusters pequeños-medianos.
+
+\textbf{Inapropiado para:} Datos críticos (financieros/médicos), multi-tenant público, geo-distribución WAN, escala masiva.
+
+El diseño implementa correctamente modelo AP del teorema CAP, evita consenso distribuido, utiliza epidemic algorithms con propiedades teóricas esperadas, y satisface definición formal de eventual consistency con bound temporal especificado.
+
+\end{document}
